@@ -137,11 +137,6 @@ def save_metrics(y_true, y_pred, out_path="metrics.txt", label_names=None, appen
 
     return out_path
 
-def weighted_loss_function(logits, labels, class_weights):
-    """Apply class weights to loss function"""
-    loss_fct = nn.CrossEntropyLoss(weight=class_weights)
-    return loss_fct(logits, labels)
-
 def train_model(config: Dict):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -149,7 +144,7 @@ def train_model(config: Dict):
 
     full_dataset = ParkinsonsDataLoader(config['data_root'])
 
-    # Get train/test split based on per-patient 80:20 split
+    #  train/test split
     train_dataset, val_dataset = full_dataset.get_train_test_split()
     
     print(f"Total samples: {len(full_dataset)}")
@@ -303,7 +298,7 @@ def train_model(config: Dict):
                 
                 logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
                 
-                # Calculate losses only for valid labels
+                
                 total_loss = 0
                 loss_count = 0
                 

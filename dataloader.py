@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple
 import warnings
 
 
-def create_windows(data, window_size=32):
+def create_windows(data, window_size=15):
     
     n_samples, n_channels = data.shape
     n_windows = n_samples // window_size
@@ -28,7 +28,7 @@ def downsample(data, original_freq=100, target_freq=32):
 
 class ParkinsonsDataLoader(Dataset):
     
-    def __init__(self, data_root: str = None, window_size: int = 32, 
+    def __init__(self, data_root: str = None, window_size: int = 16, 
                  left_samples=None, right_samples=None, 
                  hc_vs_pd_left=None, pd_vs_dd_left=None,
                  hc_vs_pd_right=None, pd_vs_dd_right=None):
