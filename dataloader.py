@@ -128,9 +128,9 @@ class ParkinsonsDataLoader(Dataset):
                         
                         if left_window is not None and right_window is not None:
                             
-                            for i in range(left_window):
+                            for i in range(len(left_window)):
                                 patient_left_samples.append(left_window[i])
-                            for i in range(right_window):
+                            for i in range(len(right_window)):
                                 patient_right_samples.append(right_window[i])
                             
                             patient_samples += 1
