@@ -20,11 +20,7 @@ def create_windows(data, window_size=32):
 
 def downsample(data, original_freq=100, target_freq=32):
     
-    if len(data.shape) != 2:
-        print(f"Warning: Expected 2D array, got shape {data.shape}")
-        return None
-    
-    step = int(original_freq // target_freq)  # Ensure step is integer
+    step = int(original_freq // target_freq)  
     if step > 1:
         return data[::step, :]
     return data
@@ -63,7 +59,6 @@ class ParkinsonsDataLoader(Dataset):
         
             self._load_data()
         else:
-            # Initialize from provided arrays
             if left_samples is not None:
                 self.left_samples = np.array(left_samples) if not isinstance(left_samples, np.ndarray) else left_samples
             if right_samples is not None:
@@ -141,7 +136,7 @@ class ParkinsonsDataLoader(Dataset):
                         right_window = create_windows(right_data, self.window_size)
                         
                         if left_window is not None and right_window is not None:
-                            # BUG FIX: Use len() instead of range() directly
+                        
                             for i in range(len(left_window)):
                                 patient_left_samples.append(left_window[i])
                             for i in range(len(right_window)):
@@ -178,7 +173,6 @@ class ParkinsonsDataLoader(Dataset):
                 print(f"Error loading patient {patient_id}: {e}")
                 continue
         
-        # Convert to numpy arrays
         self.left_samples = np.array(self.left_samples)
         self.right_samples = np.array(self.right_samples)
         self.hc_vs_pd_right = np.array(self.hc_vs_pd_right)
@@ -189,13 +183,13 @@ class ParkinsonsDataLoader(Dataset):
 
         print(f"Dataset loaded: {len(self.left_samples)} paired samples")
         if len(self.left_samples) > 0:
-            # Count valid labels (excluding -1 which means not applicable)
+        
             hc_count = np.sum(self.hc_vs_pd_left == 0)
             pd_count = np.sum(self.hc_vs_pd_left == 1)
             pd_vs_dd_pd_count = np.sum(self.pd_vs_dd_left == 0)
             pd_vs_dd_dd_count = np.sum(self.pd_vs_dd_left == 1)
             
-            # Count train/test splits
+           
             train_count = np.sum(self.sample_splits == 0)
             test_count = np.sum(self.sample_splits == 1)
             
