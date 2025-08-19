@@ -37,8 +37,17 @@ class ParkinsonsDataLoader(Dataset):
                  hc_vs_pd_left=None, pd_vs_dd_left=None,
                  hc_vs_pd_right=None, pd_vs_dd_right=None):
         
+        # Initialize all attributes first
+        self.left_samples = []
+        self.right_samples = []
+        self.hc_vs_pd_left = []
+        self.hc_vs_pd_right = []
+        self.pd_vs_dd_left = []
+        self.pd_vs_dd_right = []
+        self.sample_splits = []
+        
         if data_root is not None:
-            
+            # Load from data directory
             self.data_root = data_root
             self.window_size = window_size
             self.patients_template = pathlib.Path(data_root) / "patients" / "patient_{p:03d}.json"
@@ -49,19 +58,24 @@ class ParkinsonsDataLoader(Dataset):
                          "PointFinger", "Relaxed", "StretchHold", "TouchIndex", "TouchNose"]
             self.wrists = ["LeftWrist", "RightWrist"]
             
-            
-            self.right_samples = []
-            self.left_samples = []
-            self.hc_vs_pd_left = []
-            self.hc_vs_pd_right = []
-            self.pd_vs_dd_left = []
-            self.pd_vs_dd_right = []
-            self.sample_splits = []
-            
             self.patient_ids = list(range(1, 470))
             print(f"Dataset: {len(self.patient_ids)} patients (001-469)")
         
             self._load_data()
+        else:
+            # Initialize from provided arrays
+            if left_samples is not None:
+                self.left_samples = np.array(left_samples) if not isinstance(left_samples, np.ndarray) else left_samples
+            if right_samples is not None:
+                self.right_samples = np.array(right_samples) if not isinstance(right_samples, np.ndarray) else right_samples
+            if hc_vs_pd_left is not None:
+                self.hc_vs_pd_left = np.array(hc_vs_pd_left) if not isinstance(hc_vs_pd_left, np.ndarray) else hc_vs_pd_left
+            if pd_vs_dd_left is not None:
+                self.pd_vs_dd_left = np.array(pd_vs_dd_left) if not isinstance(pd_vs_dd_left, np.ndarray) else pd_vs_dd_left
+            if hc_vs_pd_right is not None:
+                self.hc_vs_pd_right = np.array(hc_vs_pd_right) if not isinstance(hc_vs_pd_right, np.ndarray) else hc_vs_pd_right
+            if pd_vs_dd_right is not None:
+                self.pd_vs_dd_right = np.array(pd_vs_dd_right) if not isinstance(pd_vs_dd_right, np.ndarray) else pd_vs_dd_right
     
     def _load_data(self):
         for patient_id in tqdm(self.patient_ids, desc="Loading patients"):
@@ -127,7 +141,7 @@ class ParkinsonsDataLoader(Dataset):
                         right_window = create_windows(right_data, self.window_size)
                         
                         if left_window is not None and right_window is not None:
-                            
+                            # BUG FIX: Use len() instead of range() directly
                             for i in range(len(left_window)):
                                 patient_left_samples.append(left_window[i])
                             for i in range(len(right_window)):
@@ -164,6 +178,7 @@ class ParkinsonsDataLoader(Dataset):
                 print(f"Error loading patient {patient_id}: {e}")
                 continue
         
+        # Convert to numpy arrays
         self.left_samples = np.array(self.left_samples)
         self.right_samples = np.array(self.right_samples)
         self.hc_vs_pd_right = np.array(self.hc_vs_pd_right)
@@ -215,7 +230,7 @@ class ParkinsonsDataLoader(Dataset):
         return train_dataset, test_dataset
     
     def __len__(self):
-        return len(self.left_samples)
+        return len(self.left_samples) if hasattr(self, 'left_samples') and isinstance(self.left_samples, (list, np.ndarray)) else 0
     
     def __getitem__(self, idx):
         left_sample = torch.FloatTensor(self.left_samples[idx])
