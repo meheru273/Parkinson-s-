@@ -20,7 +20,11 @@ def create_windows(data, window_size=32):
 
 def downsample(data, original_freq=100, target_freq=32):
     
-    step = original_freq // target_freq
+    if len(data.shape) != 2:
+        print(f"Warning: Expected 2D array, got shape {data.shape}")
+        return None
+    
+    step = int(original_freq // target_freq)  # Ensure step is integer
     if step > 1:
         return data[::step, :]
     return data
