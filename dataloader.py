@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple
 import warnings
 
 
-def create_windows(data, window_size=15):
+def create_windows(data, window_size=256):
     
     n_samples, n_channels = data.shape
     n_windows = n_samples // window_size
@@ -18,7 +18,7 @@ def create_windows(data, window_size=15):
         
     return windows
 
-def downsample(data, original_freq=100, target_freq=32):
+def downsample(data, original_freq=100, target_freq=64):
     
     step = int(original_freq // target_freq)  
     if step > 1:
@@ -28,12 +28,12 @@ def downsample(data, original_freq=100, target_freq=32):
 
 class ParkinsonsDataLoader(Dataset):
     
-    def __init__(self, data_root: str = None, window_size: int = 16, 
+    def __init__(self, data_root: str = None, window_size: int = 256, 
                  left_samples=None, right_samples=None, 
                  hc_vs_pd_left=None, pd_vs_dd_left=None,
                  hc_vs_pd_right=None, pd_vs_dd_right=None):
         
-        # Initialize all attributes first
+        
         self.left_samples = []
         self.right_samples = []
         self.hc_vs_pd_left = []
@@ -43,7 +43,7 @@ class ParkinsonsDataLoader(Dataset):
         self.sample_splits = []
         
         if data_root is not None:
-            # Load from data directory
+            
             self.data_root = data_root
             self.window_size = window_size
             self.patients_template = pathlib.Path(data_root) / "patients" / "patient_{p:03d}.json"

@@ -151,7 +151,7 @@ def train_model(config: Dict):
     print(f"Train samples: {len(train_dataset)}")
     print(f"Test samples: {len(val_dataset)}")
     
-    # Calculate class weights for balanced training
+    # Calculate class weights
     hc_count = np.sum(full_dataset.hc_vs_pd_left == 0)
     pd_count = np.sum(full_dataset.hc_vs_pd_left == 1)
     
@@ -205,7 +205,7 @@ def train_model(config: Dict):
     
     early_stopping = EarlyStopping(patience=config['patience'])
     
-    # Training history
+    
     history = defaultdict(list)
     best_val_accuracy = 0.0
     
@@ -290,7 +290,7 @@ def train_model(config: Dict):
             for batch in tqdm(val_loader, desc="Validation"):
                 left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
                 
-                # Move to device
+                
                 left_sample = left_sample.to(device)
                 right_sample = right_sample.to(device)
                 hc_vs_pd_left = hc_vs_pd_left.to(device)
@@ -334,7 +334,7 @@ def train_model(config: Dict):
         
         val_loss /= len(val_loader)
         
-        # Calculate validation metrics with detailed display
+        # Calculate validation metrics
         print("\n" + "="*60)
         val_metrics_hc = calculate_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, "Validation HC vs PD", verbose=True)
         val_metrics_pd = calculate_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, "Validation PD vs DD", verbose=True)
@@ -371,7 +371,6 @@ def train_model(config: Dict):
         history['val_acc_pd'].append(val_acc_pd)
         history['val_acc_combined'].append(val_acc_combined)
         
-        # Enhanced summary print
         print(f"\nEpoch {epoch+1} Summary:")
         print(f"Train Loss: {train_loss:.4f}")
         print(f"Train Acc - HC vs PD: {train_acc_hc:.4f}, PD vs DD: {train_acc_pd:.4f}")
