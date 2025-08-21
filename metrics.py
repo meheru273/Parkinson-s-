@@ -1,3 +1,7 @@
+import os
+import numpy as np
+import json
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 def calculate_metrics(y_true, y_pred, task_name="", verbose=True):
     """Calculate and display detailed metrics"""
     if len(y_true) == 0:
