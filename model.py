@@ -15,7 +15,8 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
     
     def forward(self, x):
-        return x + self.pe[:x.size(0), :]
+        seq_len = x.size(0)
+        return x + self.pe[:seq_len, :].unsqueeze(1)
 
 
 class MultiheadAttention(nn.Module):

@@ -11,14 +11,17 @@ from typing import Dict, List, Tuple
 import warnings
 import torch.nn.functional as F
 import math
+
+import os
 import numpy as np
+import json
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
 warnings.filterwarnings('ignore')
 
 from dataloader import ParkinsonsDataLoader
 from model import DualChannelTransformer
 from metrics import calculate_metrics, save_metrics
-
 class EarlyStopping:
     """Early stopping utility"""
     
@@ -38,7 +41,6 @@ class EarlyStopping:
             return self.counter >= self.patience
 
 
-
 def train_model(config: Dict):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,16 +49,16 @@ def train_model(config: Dict):
     full_dataset = ParkinsonsDataLoader(config['data_root'])
 
     train_dataset, val_dataset = full_dataset.get_train_test_split()
-
     
     
+    # Calculate class weights for balanced training
     hc_count = np.sum(full_dataset.hc_vs_pd_left == 0)
     pd_count = np.sum(full_dataset.hc_vs_pd_left == 1)
     
     pd_dd_pd_count = np.sum(full_dataset.pd_vs_dd_left == 0)
     pd_dd_dd_count = np.sum(full_dataset.pd_vs_dd_left == 1)
     
-
+    # Class weights (inverse frequency)
     hc_pd_weights = torch.FloatTensor([pd_count/hc_count, 1.0]).to(device)  # [weight_hc, weight_pd]
     pd_dd_weights = torch.FloatTensor([1.0, pd_dd_pd_count/pd_dd_dd_count]).to(device)  # [weight_pd, weight_dd]
     
@@ -97,13 +99,13 @@ def train_model(config: Dict):
         optimizer, mode='min', factor=0.5, patience=5, verbose=True
     )
     
-    
+    # Use weighted loss functions
     criterion_hc_vs_pd = nn.CrossEntropyLoss(weight=hc_pd_weights)
     criterion_pd_vs_dd = nn.CrossEntropyLoss(weight=pd_dd_weights)
     
     early_stopping = EarlyStopping(patience=config['patience'])
     
-    
+    # Training history
     history = defaultdict(list)
     best_val_accuracy = 0.0
     
@@ -188,7 +190,7 @@ def train_model(config: Dict):
             for batch in tqdm(val_loader, desc="Validation"):
                 left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
                 
-                
+                # Move to device
                 left_sample = left_sample.to(device)
                 right_sample = right_sample.to(device)
                 hc_vs_pd_left = hc_vs_pd_left.to(device)
@@ -196,7 +198,7 @@ def train_model(config: Dict):
                 
                 logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
                 
-                
+                # Calculate losses only for valid labels
                 total_loss = 0
                 loss_count = 0
                 
@@ -232,7 +234,7 @@ def train_model(config: Dict):
         
         val_loss /= len(val_loader)
         
-        # Calculate validation metrics
+        # Calculate validation metrics with detailed display
         print("\n" + "="*60)
         val_metrics_hc = calculate_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, "Validation HC vs PD", verbose=True)
         val_metrics_pd = calculate_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, "Validation PD vs DD", verbose=True)
@@ -269,6 +271,7 @@ def train_model(config: Dict):
         history['val_acc_pd'].append(val_acc_pd)
         history['val_acc_combined'].append(val_acc_combined)
         
+        # Enhanced summary print
         print(f"\nEpoch {epoch+1} Summary:")
         print(f"Train Loss: {train_loss:.4f}")
         print(f"Train Acc - HC vs PD: {train_acc_hc:.4f}, PD vs DD: {train_acc_pd:.4f}")
@@ -320,16 +323,15 @@ def main():
         'num_heads': 8,
         'num_layers': 3,
         'd_ff': 256,
-        'dropout': 0.2,  # Increased dropout
+        'dropout': 0.2,  
         'seq_len': 32,
         'num_classes': 2,  
         
-        # Training parameters with some adjustments
-        'batch_size': 32,
-        'learning_rate': 0.0005,  # Reduced learning rate
+        'batch_size': 16,
+        'learning_rate': 0.0005,  
         'weight_decay': 0.01,
         'num_epochs': 50,
-        'patience': 15,  # Increased patience
+        'patience': 15, 
         'num_workers': 0,
     }
     
