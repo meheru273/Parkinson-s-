@@ -465,10 +465,8 @@ def train_model(config: Dict):
     pd_dd_dd_count = np.sum(full_dataset.pd_vs_dd_left == 1)
     
     # Class weights (inverse frequency)
-    hc_pd_weights = torch.FloatTensor([pd_count/hc_count, 1.0]).to(device)  # [weight_hc, weight_pd]
-    pd_dd_weights = torch.FloatTensor([1.0, pd_dd_pd_count/pd_dd_dd_count]).to(device)  # [weight_pd, weight_dd]
-    
-    print(f"Class weights - HC vs PD: {hc_pd_weights}")
+    hc_pd_weights= torch.FloatTensor([pd_count/hc_count, 1.0])   # your existing formula
+    pd_dd_weights= torch.FloatTensor([1.0, pd_dd_pd_count/pd_dd_dd_count])
     print(f"Class weights - PD vs DD: {pd_dd_weights}")
     
     train_loader = DataLoader(
@@ -506,8 +504,8 @@ def train_model(config: Dict):
     )
     
     # Use weighted loss functions
-    criterion_hc_vs_pd = WeightedFocalLoss(weight=hc_pd_weights, gamma=1.0, reduction='mean').to(device)
-    criterion_pd_vs_dd = WeightedFocalLoss(weight=pd_dd_weights, gamma=1.0, reduction='mean').to(device)
+    criterion_hc_vs_pd = WeightedFocalLoss(weight=hc_pd_weights, gamma=1.0, reduction='none').to(device)
+    criterion_pd_vs_dd = WeightedFocalLoss(weight=pd_dd_weights, gamma=1.0, reduction='none').to(device)
     early_stopping = EarlyStopping(patience=config['patience'])
     
     # Training history
