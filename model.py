@@ -11,12 +11,13 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pe", pe)
+        self.register_buffer("pe", pe)  # Keep as 2D: [max_len, d_model]
     
     def forward(self, x):
-        seq_len = x.size(0)
-        return x + self.pe[:seq_len, :].unsqueeze(1)
+        # x shape: [batch_size, seq_len, d_model]
+        seq_len = x.size(1)  # Get sequence length from dimension 1
+        # Add positional encoding: [batch_size, seq_len, d_model] + [seq_len, d_model]
+        return x + self.pe[:seq_len, :].unsqueeze(0)  # Broadcast across batch dimension
 
 
 class MultiheadAttention(nn.Module):
@@ -37,13 +38,19 @@ class MultiheadAttention(nn.Module):
         self.layer_norm = nn.LayerNorm(d_model)
     
     def forward(self, query, key, value, mask=None):
-        batch_size, seq_len_q, _ = query.size()
+        # Ensure we have 3D tensors: [batch_size, seq_len, d_model]
+        if len(query.shape) != 3:
+            raise ValueError(f"Expected 3D tensor, got {query.shape}")
+            
+        batch_size, seq_len_q, d_model = query.size()
         seq_len_k = key.size(1)
         
+        # Project and reshape for multi-head attention
         Q = self.w_q(query).view(batch_size, seq_len_q, self.num_heads, self.d_k).transpose(1, 2)
         K = self.w_k(key).view(batch_size, seq_len_k, self.num_heads, self.d_k).transpose(1, 2)
         V = self.w_v(value).view(batch_size, seq_len_k, self.num_heads, self.d_k).transpose(1, 2)
         
+        # Attention computation
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
@@ -55,7 +62,7 @@ class MultiheadAttention(nn.Module):
         context = context.transpose(1, 2).contiguous().view(batch_size, seq_len_q, self.d_model)
         
         output = self.w_o(context)
-        output = self.layer_norm(output + query)
+        output = self.layer_norm(output + query)  # Residual connection
         
         return output, attention_w
 
@@ -74,7 +81,7 @@ class FeedForward(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         x = self.linear2(x)
-        x = self.layer_norm(x + residual)
+        x = self.layer_norm(x + residual)  # Residual connection
         return x
 
 
@@ -93,7 +100,7 @@ class CrossAttention(nn.Module):
     def forward(self, channel_1, channel_2):
         # Cross attention
         channel_1_cross, _ = self.cross_attention_1to2(query=channel_1, key=channel_2, value=channel_2)
-        channel_2_cross, _ = self.cross_attention_2to1( query=channel_2, key=channel_1, value=channel_1)
+        channel_2_cross, _ = self.cross_attention_2to1(query=channel_2, key=channel_1, value=channel_1)
         
         # Self attention
         channel_1_self, _ = self.self_attention_1(query=channel_1_cross, key=channel_1_cross, value=channel_1_cross)
@@ -107,26 +114,25 @@ class CrossAttention(nn.Module):
 
 
 class DualChannelTransformer(nn.Module):
-    
     def __init__(
         self,
         input_dim: int = 6,  
-        d_model: int = 64,
+        d_model: int = 128,
         num_heads: int = 8,
-        num_layers: int = 3,
-        d_ff: int = 256,
+        num_layers: int = 4,
+        d_ff: int = 512,
         dropout: float = 0.1,
-        seq_len: int = 32,
-        num_classes: int = 3
+        seq_len: int = 256,
+        num_classes: int = 2
     ):
         super().__init__()
         
         self.d_model = d_model
         self.seq_len = seq_len
         
-        # Project left wrist and right wrist data to d_model dimensions
-        self.left_projection = nn.Linear(input_dim, d_model)   # Left wrist (6 channels)
-        self.right_projection = nn.Linear(input_dim, d_model)  # Right wrist (6 channels)
+        # Project input dimensions to d_model
+        self.left_projection = nn.Linear(input_dim, d_model)
+        self.right_projection = nn.Linear(input_dim, d_model)
         
         self.positional_encoding = PositionalEncoding(d_model, max_len=seq_len)
         
@@ -137,7 +143,7 @@ class DualChannelTransformer(nn.Module):
             
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         
-        # Two classification head
+        # Classification heads
         self.head_hc_vs_pd = nn.Sequential(
             nn.Linear(d_model * 2, d_model),
             nn.ReLU(),
@@ -155,14 +161,15 @@ class DualChannelTransformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, left_wrist, right_wrist):
+        # Input shape: [batch_size, seq_len, input_dim]
         
         # Project to model dimension
-        left_encoded = self.left_projection(left_wrist)
-        right_encoded = self.right_projection(right_wrist)
+        left_encoded = self.left_projection(left_wrist)   # [batch, seq_len, d_model]
+        right_encoded = self.right_projection(right_wrist) # [batch, seq_len, d_model]
 
-        # Add positional encoding
-        left_encoded = self.positional_encoding(left_encoded.transpose(0, 1)).transpose(0, 1)
-        right_encoded = self.positional_encoding(right_encoded.transpose(0, 1)).transpose(0, 1)
+        # Add positional encoding (no transpose needed!)
+        left_encoded = self.positional_encoding(left_encoded)
+        right_encoded = self.positional_encoding(right_encoded)
         
         # Apply dropout
         left_encoded = self.dropout(left_encoded)
@@ -172,12 +179,12 @@ class DualChannelTransformer(nn.Module):
         for layer in self.layers:
             left_encoded, right_encoded = layer(left_encoded, right_encoded)
 
-        # Global pooling
+        # Global pooling: [batch, seq_len, d_model] -> [batch, d_model]
         left_pool = self.global_pool(left_encoded.transpose(1, 2)).squeeze(-1)
         right_pool = self.global_pool(right_encoded.transpose(1, 2)).squeeze(-1)
 
         # Fuse features from both channels
-        fused_features = torch.cat([left_pool, right_pool], dim=1)
+        fused_features = torch.cat([left_pool, right_pool], dim=1)  # [batch, d_model*2]
         
         # Classification
         logits_hc_vs_pd = self.head_hc_vs_pd(fused_features)
