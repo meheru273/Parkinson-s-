@@ -319,12 +319,12 @@ def main():
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
         
         'input_dim': 6, 
-        'd_model': 64,
+        'd_model': 128,
         'num_heads': 8,
         'num_layers': 3,
         'd_ff': 256,
         'dropout': 0.2,  
-        'seq_len': 32,
+        'seq_len': 256,
         'num_classes': 2,  
         
         'batch_size': 16,
