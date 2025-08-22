@@ -18,6 +18,15 @@ def create_windows(data, window_size=256):
         
     return windows
 
+def create_overlapping_window(data, window_size, overlap):
+    n_samples, n_channels = data.shape
+    stride = window_size - overlap
+    windows = []
+    for start in range(0, n_samples - window_size + 1, stride):
+        end = start + window_size
+        windows.append(data[start:end])
+    return np.array(windows)
+
 def downsample(data, original_freq=100, target_freq=64):
     
     step = int(original_freq // target_freq)  
@@ -150,7 +159,7 @@ class ParkinsonsDataLoader(Dataset):
                 
                 if len(patient_left_samples) > 0:
                     n_patient_samples = len(patient_left_samples) #both samples have same patients
-                    split_point = int(0.8 * n_patient_samples)
+                    split_point = int(0.85 * n_patient_samples)
                     
 
                     for i in range(n_patient_samples):

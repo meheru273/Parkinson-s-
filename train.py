@@ -40,7 +40,32 @@ class EarlyStopping:
             self.counter += 1
             return self.counter >= self.patience
 
-
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1.0, gamma=2.0, weight=None, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.weight = weight
+        self.reduction = reduction
+        
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.weight, reduction='none')
+        pt = torch.exp(-ce_loss)
+        
+        if isinstance(self.alpha, (float, int)):
+            alpha_t = self.alpha
+        else:
+            alpha_t = self.alpha.gather(0, targets)
+        
+        focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+        
 def train_model(config: Dict):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -100,9 +125,21 @@ def train_model(config: Dict):
     )
     
     # Use weighted loss functions
-    criterion_hc_vs_pd = nn.CrossEntropyLoss(weight=hc_pd_weights)
-    criterion_pd_vs_dd = nn.CrossEntropyLoss(weight=pd_dd_weights)
+    criterion_hc_vs_pd = FocalLoss(
+        alpha=1.0,           
+        gamma=1.5,          
+        weight=hc_pd_weights, 
+        reduction='mean'
+    )
     
+    criterion_pd_vs_dd = FocalLoss(
+        alpha=1.0,
+        gamma=1.0,
+        weight=pd_dd_weights,
+        reduction='mean'
+    )
+
+
     early_stopping = EarlyStopping(patience=config['patience'])
     
     # Training history
