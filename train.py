@@ -390,34 +390,62 @@ def main():
     return results
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 class WeightedFocalLoss(nn.Module):
-    """
-    Focal Loss with class weighting - combines both approaches
-    """
-    
-    def __init__(self, alpha=1.0, gamma=2.0, weight=None, reduction='mean'):
-        super(WeightedFocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.weight = weight
-        self.reduction = reduction
-        
-    def forward(self, inputs, targets):
-        # First apply class weights via standard cross entropy
-        ce_loss = F.cross_entropy(inputs, targets, weight=self.weight, reduction='none')
-        
-        # Get probabilities for the predicted class
-        pt = torch.exp(-ce_loss)
-        
-        # Apply focal loss modulation
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-        
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
+   
+    def __init__(self, weight=None, gamma: float = 2.0, reduction: str = 'mean', normalize: bool = True, eps: float = 1e-8):
+        super().__init__()
+        if weight is None:
+            self.register_buffer('_weight', None)
         else:
-            return focal_loss
+            w = torch.tensor(weight, dtype=torch.float32) if not isinstance(weight, torch.Tensor) else weight.clone().float()
+            if normalize:
+                w = w / (w.mean() + 1e-12)
+            # store as buffer so it moves with the module (.to(device))
+            self.register_buffer('_weight', w)
+        self.gamma = float(gamma)
+        self.reduction = reduction
+        self.eps = eps
+
+    def forward(self, logits: torch.Tensor, targets: torch.LongTensor):
+        if logits.dim() != 2:
+            raise ValueError("Logits should be shape [B, C].")
+        if targets.dim() != 1:
+            targets = targets.view(-1)
+
+        device = logits.device
+        B = logits.size(0)
+
+        # stable log-softmax and probs
+        logp = F.log_softmax(logits, dim=1)          # [B, C]
+        p = torch.exp(logp)                          # [B, C]
+
+        # gather p_t and logp_t for true classes
+        targets = targets.to(torch.long)
+        logp_t = logp.gather(1, targets.view(-1,1)).view(-1)  # [B]
+        p_t = p.gather(1, targets.view(-1,1)).view(-1)        # [B]
+
+        # clamp p_t to avoid extreme values (numerical safety)
+        p_t = p_t.clamp(min=self.eps, max=1.0 - self.eps)
+
+        if self._weight is None:
+            alpha_t = 1.0
+        else:
+            alpha = self._weight.to(device)
+            alpha_t = alpha.gather(0, targets)  # [B]
+
+        # compute focal loss per sample
+        loss = - alpha_t * ((1.0 - p_t) ** self.gamma) * logp_t  # [B]
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss  # 'none'
 
 def train_model(config: Dict):
     
@@ -478,20 +506,8 @@ def train_model(config: Dict):
     )
     
     # Use weighted loss functions
-    criterion_hc_vs_pd = WeightedFocalLoss(
-        alpha=1.0,
-        gamma=1.2,           
-        weight=hc_pd_weights, 
-        reduction='mean'
-    )
-    
-    criterion_pd_vs_dd = WeightedFocalLoss(
-        alpha=1.0,
-        gamma=1.2,
-        weight=pd_dd_weights,
-        reduction='mean'
-    )
-    
+    criterion_hc_vs_pd = WeightedFocalLoss(weight=hc_pd_weights, gamma=1.0, reduction='mean').to(device)
+    criterion_pd_vs_dd = WeightedFocalLoss(weight=pd_dd_weights, gamma=1.0, reduction='mean').to(device)
     early_stopping = EarlyStopping(patience=config['patience'])
     
     # Training history
