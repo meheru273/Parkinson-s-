@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -22,153 +22,95 @@ warnings.filterwarnings('ignore')
 from dataloader import ParkinsonsDataLoader
 from model import DualChannelTransformer
 from metrics import calculate_metrics, save_metrics
-
 class EarlyStopping:
-    """Enhanced early stopping with multiple metrics"""
+    """Early stopping utility"""
     
-    def __init__(self, patience=7, min_delta=0.001, monitor='f1'):
+    def __init__(self, patience=7, min_delta=0.001):
         self.patience = patience
         self.min_delta = min_delta
-        self.monitor = monitor
         self.counter = 0
-        self.best_score = -float('inf') if monitor == 'f1' else float('inf')
-        self.is_better = (lambda new, best: new > best + min_delta) if monitor == 'f1' else (lambda new, best: new < best - min_delta)
+        self.best_loss = float('inf')
         
-    def __call__(self, current_score):
-        if self.is_better(current_score, self.best_score):
-            self.best_score = current_score
+    def __call__(self, val_loss):
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
             self.counter = 0
             return False
         else:
             self.counter += 1
             return self.counter >= self.patience
 
-class BalancedFocalLoss(nn.Module):
-    """Improved Focal Loss with better balance for medical data"""
-    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
-        super(BalancedFocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-        
-    def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        
-        # Calculate alpha_t for each sample
-        if self.alpha is not None:
-            if isinstance(self.alpha, (float, int)):
-                alpha_t = self.alpha
-            else:
-                alpha_t = self.alpha[targets]
-        else:
-            alpha_t = 1.0
-        
-        focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
-        
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from collections import defaultdict
+import logging
+from typing import Dict, List, Tuple
+import warnings
+import torch.nn.functional as F
+import math
 
-class LabelSmoothingCrossEntropy(nn.Module):
-    """Label smoothing to prevent overconfident predictions"""
-    def __init__(self, smoothing=0.1, weight=None):
-        super(LabelSmoothingCrossEntropy, self).__init__()
-        self.smoothing = smoothing
-        self.weight = weight
-        
-    def forward(self, pred, target):
-        n_class = pred.size(1)
-        one_hot = torch.zeros_like(pred).scatter(1, target.unsqueeze(1), 1)
-        one_hot = one_hot * (1 - self.smoothing) + (1 - one_hot) * self.smoothing / (n_class - 1)
-        log_prob = F.log_softmax(pred, dim=1)
-        
-        if self.weight is not None:
-            weight_expanded = self.weight[target]
-            loss = -(one_hot * log_prob).sum(dim=1) * weight_expanded
-        else:
-            loss = -(one_hot * log_prob).sum(dim=1)
-        
-        return loss.mean()
+import os
+import numpy as np
+import json
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
-class ContrastiveLoss(nn.Module):
-    """Contrastive learning for better feature separation"""
-    def __init__(self, temperature=0.1):
-        super(ContrastiveLoss, self).__init__()
-        self.temperature = temperature
-        
-    def forward(self, features, labels):
-        # Normalize features
-        features = F.normalize(features, dim=1)
-        
-        # Compute similarity matrix
-        similarity_matrix = torch.matmul(features, features.T) / self.temperature
-        
-        # Create positive and negative masks
-        labels = labels.unsqueeze(1)
-        mask = torch.eq(labels, labels.T).float()
-        
-        # Remove diagonal elements
-        mask = mask - torch.eye(mask.size(0), device=mask.device)
-        
-        # Compute contrastive loss
-        exp_sim = torch.exp(similarity_matrix)
-        sum_exp_sim = exp_sim.sum(dim=1, keepdim=True)
-        
-        positive_sim = (exp_sim * mask).sum(dim=1)
-        
-        loss = -torch.log(positive_sim / sum_exp_sim + 1e-8)
-        return loss.mean()
+warnings.filterwarnings('ignore')
 
-def create_balanced_sampler(dataset):
-    """Create a balanced sampler for training"""
-    # Get labels for HC vs PD task (primary task)
-    hc_vs_pd_labels = dataset.hc_vs_pd_left
-    valid_indices = np.where(hc_vs_pd_labels != -1)[0]
-    valid_labels = hc_vs_pd_labels[valid_indices]
+from dataloader import ParkinsonsDataLoader
+from model import DualChannelTransformer
+from metrics import calculate_metrics, save_metrics
+class EarlyStopping:
+    """Early stopping utility"""
     
-    # Calculate weights for each class
-    class_counts = np.bincount(valid_labels)
-    class_weights = 1.0 / class_counts
-    sample_weights = class_weights[valid_labels]
-    
-    return WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(valid_indices),
-        replacement=True
-    ), valid_indices
+    def __init__(self, patience=7, min_delta=0.001):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = float('inf')
+        
+    def __call__(self, val_loss):
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            return self.counter >= self.patience
 
-def train_model_advanced(config: Dict):
-    """Advanced training with multiple techniques for medical AI"""
+
+def train_model(config: Dict):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    # Load dataset
     full_dataset = ParkinsonsDataLoader(config['data_root'])
+
     train_dataset, val_dataset = full_dataset.get_train_test_split()
     
-    # Print dataset statistics
+    
+    # Calculate class weights for balanced training
     hc_count = np.sum(full_dataset.hc_vs_pd_left == 0)
     pd_count = np.sum(full_dataset.hc_vs_pd_left == 1)
+    
     pd_dd_pd_count = np.sum(full_dataset.pd_vs_dd_left == 0)
     pd_dd_dd_count = np.sum(full_dataset.pd_vs_dd_left == 1)
     
-    print(f"Dataset Statistics:")
-    print(f"HC vs PD - HC: {hc_count}, PD: {pd_count} (ratio: {pd_count/hc_count:.2f})")
-    print(f"PD vs DD - PD: {pd_dd_pd_count}, DD: {pd_dd_dd_count} (ratio: {pd_dd_pd_count/pd_dd_dd_count:.2f})")
+    # Class weights (inverse frequency)
+    hc_pd_weights = torch.FloatTensor([pd_count/hc_count, 1.0]).to(device)  # [weight_hc, weight_pd]
+    pd_dd_weights = torch.FloatTensor([1.0, pd_dd_pd_count/pd_dd_dd_count]).to(device)  # [weight_pd, weight_dd]
     
-    # Create balanced sampler for training
-    sampler, valid_indices = create_balanced_sampler(train_dataset)
+    print(f"Class weights - HC vs PD: {hc_pd_weights}")
+    print(f"Class weights - PD vs DD: {pd_dd_weights}")
     
-    # Data loaders
     train_loader = DataLoader(
         train_dataset, 
         batch_size=config['batch_size'], 
-        sampler=sampler,
+        shuffle=True,
         num_workers=config['num_workers']
     )
     val_loader = DataLoader(
@@ -178,7 +120,6 @@ def train_model_advanced(config: Dict):
         num_workers=config['num_workers']
     )
     
-    # Model
     model = DualChannelTransformer(
         input_dim=config['input_dim'],
         d_model=config['d_model'],
@@ -190,51 +131,25 @@ def train_model_advanced(config: Dict):
         num_classes=config['num_classes']
     ).to(device)
     
-    # Advanced optimizer with different learning rates for different parts
-    backbone_params = []
-    classifier_params = []
-    
-    for name, param in model.named_parameters():
-        if 'head_' in name:
-            classifier_params.append(param)
-        else:
-            backbone_params.append(param)
-    
-    optimizer = optim.AdamW([
-        {'params': backbone_params, 'lr': config['learning_rate'] * 0.1},  # Lower LR for backbone
-        {'params': classifier_params, 'lr': config['learning_rate']}        # Higher LR for classifiers
-    ], weight_decay=config['weight_decay'])
-    
-    # Advanced scheduler
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=1e-7
+    optimizer = optim.AdamW(
+        model.parameters(), 
+        lr=config['learning_rate'],
+        weight_decay=config['weight_decay']
     )
     
-    # Calculate balanced class weights
-    hc_pd_ratio = pd_count / hc_count
-    pd_dd_ratio = pd_dd_pd_count / pd_dd_dd_count
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
     
-    hc_pd_weights = torch.FloatTensor([hc_pd_ratio, 1.0]).to(device)
-    pd_dd_weights = torch.FloatTensor([1.0, pd_dd_ratio]).to(device)
+    # Use weighted loss functions
+    criterion_hc_vs_pd = nn.CrossEntropyLoss(weight=hc_pd_weights)
+    criterion_pd_vs_dd = nn.CrossEntropyLoss(weight=pd_dd_weights)
     
-    print(f"Class weights - HC vs PD: {hc_pd_weights}")
-    print(f"Class weights - PD vs DD: {pd_dd_weights}")
-    
-    # Multiple loss functions
-    criterion_hc_vs_pd = LabelSmoothingCrossEntropy(smoothing=0.1, weight=hc_pd_weights)
-    criterion_pd_vs_dd = LabelSmoothingCrossEntropy(smoothing=0.1, weight=pd_dd_weights)
-    
-    # Contrastive loss for better feature separation
-    contrastive_loss = ContrastiveLoss(temperature=0.1)
-    
-    # Early stopping based on F1 score
-    early_stopping = EarlyStopping(patience=config['patience'], monitor='f1')
+    early_stopping = EarlyStopping(patience=config['patience'])
     
     # Training history
     history = defaultdict(list)
-    best_f1_combined = 0.0
-    
-    print("Starting advanced training...")
+    best_val_accuracy = 0.0
     
     # Training loop
     for epoch in range(config['num_epochs']):
@@ -249,7 +164,7 @@ def train_model_advanced(config: Dict):
         train_preds_pd_vs_dd = []
         train_labels_pd_vs_dd = []
         
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+        for batch in tqdm(train_loader, desc="Training"):
             left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
             
             left_sample = left_sample.to(device)
@@ -259,55 +174,32 @@ def train_model_advanced(config: Dict):
             
             optimizer.zero_grad()
             
-            # Forward pass
             logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
-            
-            # Get features for contrastive learning (from the fused features before classification)
-            with torch.no_grad():
-                # You'd need to modify your model to return features as well
-                # For now, we'll use the logits as a proxy
-                features = torch.cat([logits_hc_vs_pd, logits_pd_vs_dd], dim=1)
             
             total_loss = 0
             loss_count = 0
             
-            # HC vs PD loss
+            # HC vs PD loss (for samples where hc_vs_pd_left != -1)
             valid_hc_vs_pd_mask = (hc_vs_pd_left != -1)
             if valid_hc_vs_pd_mask.any():
                 valid_logits_hc = logits_hc_vs_pd[valid_hc_vs_pd_mask]
                 valid_labels_hc = hc_vs_pd_left[valid_hc_vs_pd_mask]
-                
-                # Classification loss
                 loss_hc = criterion_hc_vs_pd(valid_logits_hc, valid_labels_hc)
                 total_loss += loss_hc
                 loss_count += 1
-                
-                # Contrastive loss (if we have enough samples of both classes)
-                if len(torch.unique(valid_labels_hc)) > 1 and len(valid_labels_hc) > 4:
-                    valid_features_hc = features[valid_hc_vs_pd_mask]
-                    contrastive_hc = contrastive_loss(valid_features_hc, valid_labels_hc)
-                    total_loss += 0.1 * contrastive_hc  # Small weight for contrastive loss
                 
                 preds_hc = torch.argmax(valid_logits_hc, dim=1)
                 train_preds_hc_vs_pd.extend(preds_hc.cpu().numpy())
                 train_labels_hc_vs_pd.extend(valid_labels_hc.cpu().numpy())
             
-            # PD vs DD loss
+            # PD vs DD loss 
             valid_pd_vs_dd_mask = (pd_vs_dd_left != -1)
             if valid_pd_vs_dd_mask.any():
                 valid_logits_pd = logits_pd_vs_dd[valid_pd_vs_dd_mask]
                 valid_labels_pd = pd_vs_dd_left[valid_pd_vs_dd_mask]
-                
-                # Classification loss  
                 loss_pd = criterion_pd_vs_dd(valid_logits_pd, valid_labels_pd)
-                total_loss += 2.0 * loss_pd  # Higher weight for harder PD vs DD task
+                total_loss += loss_pd
                 loss_count += 1
-                
-                # Contrastive loss
-                if len(torch.unique(valid_labels_pd)) > 1 and len(valid_labels_pd) > 4:
-                    valid_features_pd = features[valid_pd_vs_dd_mask]
-                    contrastive_pd = contrastive_loss(valid_features_pd, valid_labels_pd)
-                    total_loss += 0.2 * contrastive_pd  # Slightly higher weight for harder task
                 
                 preds_pd = torch.argmax(valid_logits_pd, dim=1)
                 train_preds_pd_vs_dd.extend(preds_pd.cpu().numpy())
@@ -317,14 +209,10 @@ def train_model_advanced(config: Dict):
                 avg_loss = total_loss / loss_count
                 avg_loss.backward()
                 
-                # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 train_loss += avg_loss.item()
-            
-            # Update learning rate
-            scheduler.step(epoch + batch_idx / len(train_loader))
         
         train_loss /= len(train_loader)
         
@@ -332,7 +220,7 @@ def train_model_advanced(config: Dict):
         train_metrics_hc = calculate_metrics(train_labels_hc_vs_pd, train_preds_hc_vs_pd, "Training HC vs PD", verbose=False)
         train_metrics_pd = calculate_metrics(train_labels_pd_vs_dd, train_preds_pd_vs_dd, "Training PD vs DD", verbose=False)
         
-        # Validation phase (similar to before but with metrics focus)
+        # Validation phase
         model.eval()
         val_loss = 0.0
         val_preds_hc_vs_pd = []
@@ -344,6 +232,7 @@ def train_model_advanced(config: Dict):
             for batch in tqdm(val_loader, desc="Validation"):
                 left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
                 
+                # Move to device
                 left_sample = left_sample.to(device)
                 right_sample = right_sample.to(device)
                 hc_vs_pd_left = hc_vs_pd_left.to(device)
@@ -351,7 +240,7 @@ def train_model_advanced(config: Dict):
                 
                 logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
                 
-                # Calculate losses
+                # Calculate losses only for valid labels
                 total_loss = 0
                 loss_count = 0
                 
@@ -374,7 +263,7 @@ def train_model_advanced(config: Dict):
                     valid_logits_pd = logits_pd_vs_dd[valid_pd_vs_dd_mask]
                     valid_labels_pd = pd_vs_dd_left[valid_pd_vs_dd_mask]
                     loss_pd = criterion_pd_vs_dd(valid_logits_pd, valid_labels_pd)
-                    total_loss += 2.0 * loss_pd
+                    total_loss += loss_pd
                     loss_count += 1
                     
                     preds_pd = torch.argmax(valid_logits_pd, dim=1)
@@ -393,87 +282,460 @@ def train_model_advanced(config: Dict):
         val_metrics_pd = calculate_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, "Validation PD vs DD", verbose=True)
         print("="*60)
         
-        # Focus on F1 scores for medical AI
-        val_f1_hc = val_metrics_hc.get('f1_avg', 0)
-        val_f1_pd = val_metrics_pd.get('f1_avg', 0)
-        val_f1_combined = (val_f1_hc + val_f1_pd) / 2
+        # Combined accuracy (average of both tasks)
+        val_acc_hc = val_metrics_hc.get('accuracy', 0)
+        val_acc_pd = val_metrics_pd.get('accuracy', 0)
+        val_acc_combined = (val_acc_hc + val_acc_pd) / 2
+        
+        train_acc_hc = train_metrics_hc.get('accuracy', 0)
+        train_acc_pd = train_metrics_pd.get('accuracy', 0)
+        
+        # Save detailed metrics to files
+        if val_labels_hc_vs_pd:
+            label_names_hc = {0: "HC", 1: "PD"}
+            save_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, 
+                        f"metrics/epoch_{epoch}_hc_vs_pd.txt", label_names_hc)
+        
+        if val_labels_pd_vs_dd:
+            label_names_pd = {0: "PD", 1: "DD"}
+            save_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, 
+                        f"metrics/epoch_{epoch}_pd_vs_dd.txt", label_names_pd)
+        
+        # Update scheduler
+        scheduler.step(val_loss)
         
         # Save history
         history['train_loss'].append(train_loss)
+        history['train_acc_hc'].append(train_acc_hc)
+        history['train_acc_pd'].append(train_acc_pd)
         history['val_loss'].append(val_loss)
-        history['val_f1_hc'].append(val_f1_hc)
-        history['val_f1_pd'].append(val_f1_pd)
-        history['val_f1_combined'].append(val_f1_combined)
+        history['val_acc_hc'].append(val_acc_hc)
+        history['val_acc_pd'].append(val_acc_pd)
+        history['val_acc_combined'].append(val_acc_combined)
         
-        # Print comprehensive metrics
+        # Enhanced summary print
         print(f"\nEpoch {epoch+1} Summary:")
-        print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-        print(f"Val F1 - HC vs PD: {val_f1_hc:.4f}, PD vs DD: {val_f1_pd:.4f}, Combined: {val_f1_combined:.4f}")
-        print(f"Current LR: {scheduler.get_last_lr()[0]:.2e}")
+        print(f"Train Loss: {train_loss:.4f}")
+        print(f"Train Acc - HC vs PD: {train_acc_hc:.4f}, PD vs DD: {train_acc_pd:.4f}")
+        print(f"Val Loss: {val_loss:.4f}")
+        print(f"Val Acc - HC vs PD: {val_acc_hc:.4f}, PD vs DD: {val_acc_pd:.4f}, Combined: {val_acc_combined:.4f}")
         
-        # Save best model based on F1 score
-        if val_f1_combined > best_f1_combined:
-            best_f1_combined = val_f1_combined
+        if val_metrics_hc:
+            print(f"Val F1 - HC vs PD: {val_metrics_hc.get('f1_avg', 0):.4f}")
+        if val_metrics_pd:
+            print(f"Val F1 - PD vs DD: {val_metrics_pd.get('f1_avg', 0):.4f}")
+        
+        # Save best model
+        if val_acc_combined > best_val_accuracy:
+            best_val_accuracy = val_acc_combined
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'epoch': epoch,
-                'val_f1_combined': val_f1_combined,
-                'val_f1_hc': val_f1_hc,
-                'val_f1_pd': val_f1_pd,
+                'val_acc_combined': val_acc_combined,
+                'val_acc_hc': val_acc_hc,
+                'val_acc_pd': val_acc_pd,
                 'config': config
-            }, 'best_model_f1.pth')
-            print("✓ New best F1 model saved!")
+            }, 'best_model.pth')
+            print("✓ New best model saved!")
         
-        # Early stopping based on F1 score
-        if early_stopping(val_f1_combined):
-            print(f"Early stopping at epoch {epoch+1} (F1 not improving)")
+        # Early stopping check
+        if early_stopping(val_loss):
+            print(f"Early stopping at epoch {epoch+1}")
             break
     
-    print(f"\nTraining completed! Best combined F1 score: {best_f1_combined:.4f}")
+    print(f"\nTraining completed! Best combined validation accuracy: {best_val_accuracy:.4f}")
     
     return {
-        'best_f1_combined': best_f1_combined,
+        'best_val_accuracy': best_val_accuracy,
         'history': history,
         'model': model
     }
 
+
 def main():
-    """Main function with advanced configuration"""
+    """Main function"""
     
+    # Configuration with some improvements
     config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
         
-        # Model architecture - optimized for medical data
         'input_dim': 6, 
         'd_model': 128,
         'num_heads': 8,
-        'num_layers': 4,      # Increased depth for better pattern recognition
-        'd_ff': 512,          # Increased capacity
-        'dropout': 0.3,       # Higher dropout to prevent overfitting
+        'num_layers': 3,
+        'd_ff': 256,
+        'dropout': 0.2,  
         'seq_len': 256,
         'num_classes': 2,  
         
-        # Training parameters - optimized for medical AI
-        'batch_size': 12,     # Smaller batch for better gradient updates
-        'learning_rate': 1e-4, # Lower learning rate for stability
-        'weight_decay': 0.02,  # Higher regularization
-        'num_epochs': 100,     # More epochs with early stopping
-        'patience': 20,        # More patience for medical data
+        'batch_size': 16,
+        'learning_rate': 0.0005,  
+        'weight_decay': 0.01,
+        'num_epochs': 50,
+        'patience': 15, 
         'num_workers': 0,
     }
     
-    print("Advanced Medical AI Configuration:")
+    print("Configuration:")
     for key, value in config.items():
         print(f"  {key}: {value}")
     
-    results = train_model_advanced(config)
+    results = train_model(config)
     
     if results is None:
         print("Training failed due to data loading issues.")
         return None
     
     return results
+
+
+class WeightedFocalLoss(nn.Module):
+    """
+    Focal Loss with class weighting - combines both approaches
+    """
+    
+    def __init__(self, alpha=1.0, gamma=2.0, weight=None, reduction='mean'):
+        super(WeightedFocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.weight = weight
+        self.reduction = reduction
+        
+    def forward(self, inputs, targets):
+        # First apply class weights via standard cross entropy
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.weight, reduction='none')
+        
+        # Get probabilities for the predicted class
+        pt = torch.exp(-ce_loss)
+        
+        # Apply focal loss modulation
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+def train_model(config: Dict):
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    full_dataset = ParkinsonsDataLoader(config['data_root'])
+
+    train_dataset, val_dataset = full_dataset.get_train_test_split()
+    
+    
+    # Calculate class weights for balanced training
+    hc_count = np.sum(full_dataset.hc_vs_pd_left == 0)
+    pd_count = np.sum(full_dataset.hc_vs_pd_left == 1)
+    
+    pd_dd_pd_count = np.sum(full_dataset.pd_vs_dd_left == 0)
+    pd_dd_dd_count = np.sum(full_dataset.pd_vs_dd_left == 1)
+    
+    # Class weights (inverse frequency)
+    hc_pd_weights = torch.FloatTensor([pd_count/hc_count, 1.0]).to(device)  # [weight_hc, weight_pd]
+    pd_dd_weights = torch.FloatTensor([1.0, pd_dd_pd_count/pd_dd_dd_count]).to(device)  # [weight_pd, weight_dd]
+    
+    print(f"Class weights - HC vs PD: {hc_pd_weights}")
+    print(f"Class weights - PD vs DD: {pd_dd_weights}")
+    
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=config['batch_size'], 
+        shuffle=True,
+        num_workers=config['num_workers']
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=config['batch_size'], 
+        shuffle=False,
+        num_workers=config['num_workers']
+    )
+    
+    model = DualChannelTransformer(
+        input_dim=config['input_dim'],
+        d_model=config['d_model'],
+        num_heads=config['num_heads'],
+        num_layers=config['num_layers'],
+        d_ff=config['d_ff'],
+        dropout=config['dropout'],
+        seq_len=config['seq_len'],
+        num_classes=config['num_classes']
+    ).to(device)
+    
+    optimizer = optim.AdamW(
+        model.parameters(), 
+        lr=config['learning_rate'],
+        weight_decay=config['weight_decay']
+    )
+    
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
+    
+    # Use weighted loss functions
+    criterion_hc_vs_pd = WeightedFocalLoss(
+        alpha=1.0,
+        gamma=1.2,           
+        weight=hc_pd_weights, 
+        reduction='mean'
+    )
+    
+    criterion_pd_vs_dd = WeightedFocalLoss(
+        alpha=1.0,
+        gamma=1.2,
+        weight=pd_dd_weights,
+        reduction='mean'
+    )
+    
+    early_stopping = EarlyStopping(patience=config['patience'])
+    
+    # Training history
+    history = defaultdict(list)
+    best_val_accuracy = 0.0
+    
+    # Training loop
+    for epoch in range(config['num_epochs']):
+        print(f"\nEpoch {epoch+1}/{config['num_epochs']}")
+        print("-" * 50)
+        
+        # Training phase
+        model.train()
+        train_loss = 0.0
+        train_preds_hc_vs_pd = []
+        train_labels_hc_vs_pd = []
+        train_preds_pd_vs_dd = []
+        train_labels_pd_vs_dd = []
+        
+        for batch in tqdm(train_loader, desc="Training"):
+            left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
+            
+            left_sample = left_sample.to(device)
+            right_sample = right_sample.to(device)
+            hc_vs_pd_left = hc_vs_pd_left.to(device)
+            pd_vs_dd_left = pd_vs_dd_left.to(device)
+            
+            optimizer.zero_grad()
+            
+            logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
+            
+            total_loss = 0
+            loss_count = 0
+            
+            # HC vs PD loss (for samples where hc_vs_pd_left != -1)
+            valid_hc_vs_pd_mask = (hc_vs_pd_left != -1)
+            if valid_hc_vs_pd_mask.any():
+                valid_logits_hc = logits_hc_vs_pd[valid_hc_vs_pd_mask]
+                valid_labels_hc = hc_vs_pd_left[valid_hc_vs_pd_mask]
+                loss_hc = criterion_hc_vs_pd(valid_logits_hc, valid_labels_hc)
+                total_loss += loss_hc
+                loss_count += 1
+                
+                preds_hc = torch.argmax(valid_logits_hc, dim=1)
+                train_preds_hc_vs_pd.extend(preds_hc.cpu().numpy())
+                train_labels_hc_vs_pd.extend(valid_labels_hc.cpu().numpy())
+            
+            # PD vs DD loss 
+            valid_pd_vs_dd_mask = (pd_vs_dd_left != -1)
+            if valid_pd_vs_dd_mask.any():
+                valid_logits_pd = logits_pd_vs_dd[valid_pd_vs_dd_mask]
+                valid_labels_pd = pd_vs_dd_left[valid_pd_vs_dd_mask]
+                loss_pd = criterion_pd_vs_dd(valid_logits_pd, valid_labels_pd)
+                total_loss += loss_pd
+                loss_count += 1
+                
+                preds_pd = torch.argmax(valid_logits_pd, dim=1)
+                train_preds_pd_vs_dd.extend(preds_pd.cpu().numpy())
+                train_labels_pd_vs_dd.extend(valid_labels_pd.cpu().numpy())
+            
+            if loss_count > 0:
+                avg_loss = total_loss / loss_count
+                avg_loss.backward()
+                
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                
+                train_loss += avg_loss.item()
+        
+        train_loss /= len(train_loader)
+        
+        # Calculate training metrics
+        train_metrics_hc = calculate_metrics(train_labels_hc_vs_pd, train_preds_hc_vs_pd, "Training HC vs PD", verbose=False)
+        train_metrics_pd = calculate_metrics(train_labels_pd_vs_dd, train_preds_pd_vs_dd, "Training PD vs DD", verbose=False)
+        
+        # Validation phase
+        model.eval()
+        val_loss = 0.0
+        val_preds_hc_vs_pd = []
+        val_labels_hc_vs_pd = []
+        val_preds_pd_vs_dd = []
+        val_labels_pd_vs_dd = []
+        
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validation"):
+                left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
+                
+                # Move to device
+                left_sample = left_sample.to(device)
+                right_sample = right_sample.to(device)
+                hc_vs_pd_left = hc_vs_pd_left.to(device)
+                pd_vs_dd_left = pd_vs_dd_left.to(device)
+                
+                logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
+                
+                # Calculate losses only for valid labels
+                total_loss = 0
+                loss_count = 0
+                
+                # HC vs PD validation
+                valid_hc_vs_pd_mask = (hc_vs_pd_left != -1)
+                if valid_hc_vs_pd_mask.any():
+                    valid_logits_hc = logits_hc_vs_pd[valid_hc_vs_pd_mask]
+                    valid_labels_hc = hc_vs_pd_left[valid_hc_vs_pd_mask]
+                    loss_hc = criterion_hc_vs_pd(valid_logits_hc, valid_labels_hc)
+                    total_loss += loss_hc
+                    loss_count += 1
+                    
+                    preds_hc = torch.argmax(valid_logits_hc, dim=1)
+                    val_preds_hc_vs_pd.extend(preds_hc.cpu().numpy())
+                    val_labels_hc_vs_pd.extend(valid_labels_hc.cpu().numpy())
+                
+                # PD vs DD validation
+                valid_pd_vs_dd_mask = (pd_vs_dd_left != -1)
+                if valid_pd_vs_dd_mask.any():
+                    valid_logits_pd = logits_pd_vs_dd[valid_pd_vs_dd_mask]
+                    valid_labels_pd = pd_vs_dd_left[valid_pd_vs_dd_mask]
+                    loss_pd = criterion_pd_vs_dd(valid_logits_pd, valid_labels_pd)
+                    total_loss += loss_pd
+                    loss_count += 1
+                    
+                    preds_pd = torch.argmax(valid_logits_pd, dim=1)
+                    val_preds_pd_vs_dd.extend(preds_pd.cpu().numpy())
+                    val_labels_pd_vs_dd.extend(valid_labels_pd.cpu().numpy())
+                
+                if loss_count > 0:
+                    avg_loss = total_loss / loss_count
+                    val_loss += avg_loss.item()
+        
+        val_loss /= len(val_loader)
+        
+        # Calculate validation metrics with detailed display
+        print("\n" + "="*60)
+        val_metrics_hc = calculate_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, "Validation HC vs PD", verbose=True)
+        val_metrics_pd = calculate_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, "Validation PD vs DD", verbose=True)
+        print("="*60)
+        
+        # Combined accuracy (average of both tasks)
+        val_acc_hc = val_metrics_hc.get('accuracy', 0)
+        val_acc_pd = val_metrics_pd.get('accuracy', 0)
+        val_acc_combined = (val_acc_hc + val_acc_pd) / 2
+        
+        train_acc_hc = train_metrics_hc.get('accuracy', 0)
+        train_acc_pd = train_metrics_pd.get('accuracy', 0)
+        
+        # Save detailed metrics to files
+        if val_labels_hc_vs_pd:
+            label_names_hc = {0: "HC", 1: "PD"}
+            save_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, 
+                        f"metrics/epoch_{epoch}_hc_vs_pd.txt", label_names_hc)
+        
+        if val_labels_pd_vs_dd:
+            label_names_pd = {0: "PD", 1: "DD"}
+            save_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, 
+                        f"metrics/epoch_{epoch}_pd_vs_dd.txt", label_names_pd)
+        
+        # Update scheduler
+        scheduler.step(val_loss)
+        
+        # Save history
+        history['train_loss'].append(train_loss)
+        history['train_acc_hc'].append(train_acc_hc)
+        history['train_acc_pd'].append(train_acc_pd)
+        history['val_loss'].append(val_loss)
+        history['val_acc_hc'].append(val_acc_hc)
+        history['val_acc_pd'].append(val_acc_pd)
+        history['val_acc_combined'].append(val_acc_combined)
+        
+        # Enhanced summary print
+        print(f"\nEpoch {epoch+1} Summary:")
+        print(f"Train Loss: {train_loss:.4f}")
+        print(f"Train Acc - HC vs PD: {train_acc_hc:.4f}, PD vs DD: {train_acc_pd:.4f}")
+        print(f"Val Loss: {val_loss:.4f}")
+        print(f"Val Acc - HC vs PD: {val_acc_hc:.4f}, PD vs DD: {val_acc_pd:.4f}, Combined: {val_acc_combined:.4f}")
+        
+        if val_metrics_hc:
+            print(f"Val F1 - HC vs PD: {val_metrics_hc.get('f1_avg', 0):.4f}")
+        if val_metrics_pd:
+            print(f"Val F1 - PD vs DD: {val_metrics_pd.get('f1_avg', 0):.4f}")
+        
+        # Save best model
+        if val_acc_combined > best_val_accuracy:
+            best_val_accuracy = val_acc_combined
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'epoch': epoch,
+                'val_acc_combined': val_acc_combined,
+                'val_acc_hc': val_acc_hc,
+                'val_acc_pd': val_acc_pd,
+                'config': config
+            }, 'best_model.pth')
+            print("✓ New best model saved!")
+        
+        # Early stopping check
+        if early_stopping(val_loss):
+            print(f"Early stopping at epoch {epoch+1}")
+            break
+    
+    print(f"\nTraining completed! Best combined validation accuracy: {best_val_accuracy:.4f}")
+    
+    return {
+        'best_val_accuracy': best_val_accuracy,
+        'history': history,
+        'model': model
+    }
+
+
+def main():
+    """Main function"""
+    
+    # Configuration with some improvements
+    config = {
+        'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+        
+        'input_dim': 6, 
+        'd_model': 128,
+        'num_heads': 8,
+        'num_layers': 3,
+        'd_ff': 256,
+        'dropout': 0.2,  
+        'seq_len': 256,
+        'num_classes': 2,  
+        
+        'batch_size': 16,
+        'learning_rate': 0.0005,  
+        'weight_decay': 0.01,
+        'num_epochs': 50,
+        'patience': 15, 
+        'num_workers': 0,
+    }
+    
+    print("Configuration:")
+    for key, value in config.items():
+        print(f"  {key}: {value}")
+    
+    results = train_model(config)
+    
+    if results is None:
+        print("Training failed due to data loading issues.")
+        return None
+    
+    return results
+
 
 if __name__ == "__main__":
     results = main()
