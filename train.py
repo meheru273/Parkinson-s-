@@ -22,51 +22,6 @@ warnings.filterwarnings('ignore')
 from dataloader import ParkinsonsDataLoader
 from model import DualChannelTransformer
 from metrics import calculate_metrics, save_metrics
-
-
-class FocalLoss(nn.Module):
-    """
-    Focal Loss implementation for addressing class imbalance
-    
-    Args:
-        alpha: Weighting factor for rare class (default: 1.0)
-        gamma: Focusing parameter to down-weight easy examples (default: 2.0)
-        class_weights: Optional class weights tensor
-        reduction: Specifies the reduction to apply to the output
-    """
-    
-    def __init__(self, alpha=1.0, gamma=2.0, class_weights=None, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.class_weights = class_weights
-        self.reduction = reduction
-    
-    def forward(self, inputs, targets):
-        # Compute cross entropy
-        ce_loss = F.cross_entropy(inputs, targets, weight=self.class_weights, reduction='none')
-        
-        # Compute probabilities
-        pt = torch.exp(-ce_loss)
-        
-        # Apply alpha weighting
-        if self.alpha is not None:
-            if isinstance(self.alpha, (float, int)):
-                alpha_t = self.alpha
-            else:
-                alpha_t = self.alpha.gather(0, targets)
-            focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
-        else:
-            focal_loss = (1 - pt) ** self.gamma * ce_loss
-        
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
-
-
 class EarlyStopping:
     """Early stopping utility"""
     
@@ -144,22 +99,9 @@ def train_model(config: Dict):
         optimizer, mode='min', factor=0.5, patience=5, verbose=True
     )
     
-    # Use Focal Loss instead of Cross Entropy Loss
-    criterion_hc_vs_pd = FocalLoss(
-        alpha=config['focal_alpha'], 
-        gamma=config['focal_gamma'],
-        class_weights=hc_pd_weights,
-        reduction='mean'
-    )
-    
-    criterion_pd_vs_dd = FocalLoss(
-        alpha=config['focal_alpha'], 
-        gamma=config['focal_gamma'],
-        class_weights=pd_dd_weights,
-        reduction='mean'
-    )
-    
-    print(f"Using Focal Loss with alpha={config['focal_alpha']}, gamma={config['focal_gamma']}")
+    # Use weighted loss functions
+    criterion_hc_vs_pd = nn.CrossEntropyLoss(weight=hc_pd_weights)
+    criterion_pd_vs_dd = nn.CrossEntropyLoss(weight=pd_dd_weights)
     
     early_stopping = EarlyStopping(patience=config['patience'])
     
@@ -232,7 +174,7 @@ def train_model(config: Dict):
         
         train_loss /= len(train_loader)
         
-        # Calculate training metrics
+
         train_metrics_hc = calculate_metrics(train_labels_hc_vs_pd, train_preds_hc_vs_pd, "Training HC vs PD", verbose=False)
         train_metrics_pd = calculate_metrics(train_labels_pd_vs_dd, train_preds_pd_vs_dd, "Training PD vs DD", verbose=False)
         
@@ -292,13 +234,13 @@ def train_model(config: Dict):
         
         val_loss /= len(val_loader)
         
-        # Calculate validation metrics with detailed display
+    
         print("\n" + "="*60)
         val_metrics_hc = calculate_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, "Validation HC vs PD", verbose=True)
         val_metrics_pd = calculate_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, "Validation PD vs DD", verbose=True)
         print("="*60)
         
-        # Combined accuracy (average of both tasks)
+    
         val_acc_hc = val_metrics_hc.get('accuracy', 0)
         val_acc_pd = val_metrics_pd.get('accuracy', 0)
         val_acc_combined = (val_acc_hc + val_acc_pd) / 2
@@ -306,7 +248,6 @@ def train_model(config: Dict):
         train_acc_hc = train_metrics_hc.get('accuracy', 0)
         train_acc_pd = train_metrics_pd.get('accuracy', 0)
         
-        # Save detailed metrics to files
         if val_labels_hc_vs_pd:
             label_names_hc = {0: "HC", 1: "PD"}
             save_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, 
@@ -317,7 +258,7 @@ def train_model(config: Dict):
             save_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, 
                         f"metrics/epoch_{epoch}_pd_vs_dd.txt", label_names_pd)
         
-        # Update scheduler
+    
         scheduler.step(val_loss)
         
         # Save history
@@ -329,7 +270,7 @@ def train_model(config: Dict):
         history['val_acc_pd'].append(val_acc_pd)
         history['val_acc_combined'].append(val_acc_combined)
         
-        # Enhanced summary print
+    
         print(f"\nEpoch {epoch+1} Summary:")
         print(f"Train Loss: {train_loss:.4f}")
         print(f"Train Acc - HC vs PD: {train_acc_hc:.4f}, PD vs DD: {train_acc_pd:.4f}")
@@ -372,7 +313,7 @@ def train_model(config: Dict):
 def main():
     """Main function"""
     
-    # Configuration with Focal Loss parameters
+    # Configuration with some improvements
     config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
         
@@ -382,20 +323,16 @@ def main():
         'num_layers': 3,
         'd_ff': 256,
         'dropout': 0.2,  
-        'seq_len': 32,
+        'seq_len': 256,
         'num_classes': 2,  
         
-        # Training parameters
+        # Training parameters with some adjustments
         'batch_size': 32,
         'learning_rate': 0.0005,  
         'weight_decay': 0.01,
         'num_epochs': 50,
-        'patience': 15,
+        'patience': 15,  # Increased patience
         'num_workers': 0,
-        
-        # Focal Loss parameters
-        'focal_alpha': 1.0,    # Weighting factor for rare class
-        'focal_gamma': 2.0,    # Focusing parameter (higher = more focus on hard examples)
     }
     
     print("Configuration:")

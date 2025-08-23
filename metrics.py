@@ -33,9 +33,9 @@ def calculate_metrics(y_true, y_pred, task_name="", verbose=True):
     if verbose and task_name:
         print(f"\n=== {task_name} Metrics ===")
         print(f"Accuracy: {accuracy:.4f}")
-        print(f"Weighted Precision: {precision_avg:.4f}")
-        print(f"Weighted Recall: {recall_avg:.4f}")
-        print(f"Weighted F1: {f1_avg:.4f}")
+        print(f" Precision: {precision_avg:.4f}")
+        print(f" Recall: {recall_avg:.4f}")
+        print(f"F1: {f1_avg:.4f}")
         
         # Per-class metrics
         unique_labels = np.unique(np.concatenate([y_true, y_pred]))
