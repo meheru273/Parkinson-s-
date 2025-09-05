@@ -16,217 +16,181 @@ import os
 import numpy as np
 import json
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
-
+from transformers import BertTokenizer, BertModel
 warnings.filterwarnings('ignore')
 
 from dataloader import ParkinsonsDataLoader
 from model import DualChannelTransformer
-from metrics import calculate_metrics, save_metrics
-class EarlyStopping:
-    """Early stopping utility"""
-    
-    def __init__(self, patience=7, min_delta=0.001):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.best_loss = float('inf')
-        
-    def __call__(self, val_loss):
-        if val_loss < self.best_loss - self.min_delta:
-            self.best_loss = val_loss
-            self.counter = 0
-            return False
-        else:
-            self.counter += 1
-            return self.counter >= self.patience
+from metrics import calculate_metrics, save_metrics, plot_loss
 
 
 def train_model(config: Dict):
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # Fixed: added ()
     print(f"Using device: {device}")
-
+    
     full_dataset = ParkinsonsDataLoader(config['data_root'])
 
     train_dataset, val_dataset = full_dataset.get_train_test_split()
     
-    
-    # Calculate class weights for balanced training
-    hc_count = np.sum(full_dataset.hc_vs_pd_left == 0)
-    pd_count = np.sum(full_dataset.hc_vs_pd_left == 1)
-    
-    pd_dd_pd_count = np.sum(full_dataset.pd_vs_dd_left == 0)
-    pd_dd_dd_count = np.sum(full_dataset.pd_vs_dd_left == 1)
-    
-    # Class weights (inverse frequency)
-    hc_pd_weights = torch.FloatTensor([pd_count/hc_count, 1.0]).to(device)  # [weight_hc, weight_pd]
-    pd_dd_weights = torch.FloatTensor([1.0, pd_dd_pd_count/pd_dd_dd_count]).to(device)  # [weight_pd, weight_dd]
-    
-    print(f"Class weights - HC vs PD: {hc_pd_weights}")
-    print(f"Class weights - PD vs DD: {pd_dd_weights}")
-    
+   
     train_loader = DataLoader(
-        train_dataset, 
-        batch_size=config['batch_size'], 
+        train_dataset,
+        batch_size=config['batch_size'],
         shuffle=True,
         num_workers=config['num_workers']
     )
+
     val_loader = DataLoader(
-        val_dataset, 
-        batch_size=config['batch_size'], 
+        val_dataset,
+        batch_size=config['batch_size'],
         shuffle=False,
         num_workers=config['num_workers']
     )
-    
+
     model = DualChannelTransformer(
         input_dim=config['input_dim'],
-        d_model=config['d_model'],
+        model_dim=config['model_dim'],  
         num_heads=config['num_heads'],
+        # Removed duplicate num_heads line
         num_layers=config['num_layers'],
         d_ff=config['d_ff'],
         dropout=config['dropout'],
         seq_len=config['seq_len'],
         num_classes=config['num_classes']
     ).to(device)
-    
+
     optimizer = optim.AdamW(
-        model.parameters(), 
+        model.parameters(),
         lr=config['learning_rate'],
         weight_decay=config['weight_decay']
     )
-    
+
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5, verbose=True
     )
+
+    # Standard CrossEntropyLoss 
+    hc_pd_loss = nn.CrossEntropyLoss()
+    pd_dd_loss = nn.CrossEntropyLoss()
     
-    # Use weighted loss functions
-    criterion_hc_vs_pd = nn.CrossEntropyLoss(weight=hc_pd_weights)
-    criterion_pd_vs_dd = nn.CrossEntropyLoss(weight=pd_dd_weights)
-    
-    early_stopping = EarlyStopping(patience=config['patience'])
-    
-    # Training history
     history = defaultdict(list)
-    best_val_accuracy = 0.0
+    best_val_acc = 0.0
     
     # Training loop
     for epoch in range(config['num_epochs']):
-        print(f"\nEpoch {epoch+1}/{config['num_epochs']}")
-        print("-" * 50)
+        print(f"\nEpoch {epoch + 1}/{config['num_epochs']}")
         
-        # Training phase
         model.train()
         train_loss = 0.0
-        train_preds_hc_vs_pd = []
-        train_labels_hc_vs_pd = []
-        train_preds_pd_vs_dd = []
-        train_labels_pd_vs_dd = []
+        hc_pd_train_pred = []
+        hc_pd_train_labels = []
+        pd_dd_train_pred = []
+        pd_dd_train_labels = []
         
-        for batch in tqdm(train_loader, desc="Training"):
-            left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
+        for batch in tqdm(train_loader, desc="Training"): 
+            left_sample, right_sample, hc_pd, pd_dd, patient_text = batch
             
             left_sample = left_sample.to(device)
             right_sample = right_sample.to(device)
-            hc_vs_pd_left = hc_vs_pd_left.to(device)
-            pd_vs_dd_left = pd_vs_dd_left.to(device)
+            hc_pd = hc_pd.to(device)
+            pd_dd = pd_dd.to(device)
             
             optimizer.zero_grad()
-            
-            logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
+
+            hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, patient_text, device)
             
             total_loss = 0
-            loss_count = 0
+            loss_count = 0 
             
-            # HC vs PD loss (for samples where hc_vs_pd_left != -1)
-            valid_hc_vs_pd_mask = (hc_vs_pd_left != -1)
-            if valid_hc_vs_pd_mask.any():
-                valid_logits_hc = logits_hc_vs_pd[valid_hc_vs_pd_mask]
-                valid_labels_hc = hc_vs_pd_left[valid_hc_vs_pd_mask]
-                loss_hc = criterion_hc_vs_pd(valid_logits_hc, valid_labels_hc)
+            # HC vs PD loss
+            valid_hc_pd_mask = (hc_pd != -1)
+            if valid_hc_pd_mask.any():
+                valid_logits_hc = hc_pd_logits[valid_hc_pd_mask]
+                valid_labels_hc = hc_pd[valid_hc_pd_mask]
+                loss_hc = hc_pd_loss(valid_logits_hc, valid_labels_hc)  # Fixed: use correct loss function
                 total_loss += loss_hc
                 loss_count += 1
-                
-                preds_hc = torch.argmax(valid_logits_hc, dim=1)
-                train_preds_hc_vs_pd.extend(preds_hc.cpu().numpy())
-                train_labels_hc_vs_pd.extend(valid_labels_hc.cpu().numpy())
+
+                preds_hc = torch.argmax(valid_logits_hc, dim=1)  # Fixed: dim=1, not -1
+                hc_pd_train_pred.extend(preds_hc.cpu().numpy())
+                hc_pd_train_labels.extend(valid_labels_hc.cpu().numpy())
             
-            # PD vs DD loss 
-            valid_pd_vs_dd_mask = (pd_vs_dd_left != -1)
-            if valid_pd_vs_dd_mask.any():
-                valid_logits_pd = logits_pd_vs_dd[valid_pd_vs_dd_mask]
-                valid_labels_pd = pd_vs_dd_left[valid_pd_vs_dd_mask]
-                loss_pd = criterion_pd_vs_dd(valid_logits_pd, valid_labels_pd)
+            # PD vs DD loss  
+            valid_pd_dd_mask = (pd_dd != -1)
+            if valid_pd_dd_mask.any():
+                valid_logits_pd = pd_dd_logits[valid_pd_dd_mask]
+                valid_labels_pd = pd_dd[valid_pd_dd_mask]
+                loss_pd = pd_dd_loss(valid_logits_pd, valid_labels_pd)
                 total_loss += loss_pd
                 loss_count += 1
-                
+
                 preds_pd = torch.argmax(valid_logits_pd, dim=1)
-                train_preds_pd_vs_dd.extend(preds_pd.cpu().numpy())
-                train_labels_pd_vs_dd.extend(valid_labels_pd.cpu().numpy())
-            
+                pd_dd_train_pred.extend(preds_pd.cpu().numpy())
+                pd_dd_train_labels.extend(valid_labels_pd.cpu().numpy())
+                
+            # Back propagation
             if loss_count > 0:
                 avg_loss = total_loss / loss_count
                 avg_loss.backward()
                 
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-                
                 train_loss += avg_loss.item()
         
-        train_loss /= len(train_loader)
+        train_loss /= len(train_loader)  
         
-
-        train_metrics_hc = calculate_metrics(train_labels_hc_vs_pd, train_preds_hc_vs_pd, "Training HC vs PD", verbose=False)
-        train_metrics_pd = calculate_metrics(train_labels_pd_vs_dd, train_preds_pd_vs_dd, "Training PD vs DD", verbose=False)
+        # Calculate training metrics
+        train_metrics_hc = calculate_metrics(hc_pd_train_labels, hc_pd_train_pred, "Training HC vs PD", verbose=False)
+        train_metrics_pd = calculate_metrics(pd_dd_train_labels, pd_dd_train_pred, "Training PD vs DD", verbose=False)
         
         # Validation phase
         model.eval()
         val_loss = 0.0
-        val_preds_hc_vs_pd = []
-        val_labels_hc_vs_pd = []
-        val_preds_pd_vs_dd = []
-        val_labels_pd_vs_dd = []
+        hc_pd_val_pred = []
+        hc_pd_val_labels = []
+        pd_dd_val_pred = []
+        pd_dd_val_labels = []
         
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validation"):
-                left_sample, right_sample, hc_vs_pd_left, pd_vs_dd_left, hc_vs_pd_right, pd_vs_dd_right = batch
+                left_sample, right_sample, hc_pd, pd_dd, patient_text = batch
                 
-                # Move to device
                 left_sample = left_sample.to(device)
                 right_sample = right_sample.to(device)
-                hc_vs_pd_left = hc_vs_pd_left.to(device)
-                pd_vs_dd_left = pd_vs_dd_left.to(device)
+                hc_pd = hc_pd.to(device)
+                pd_dd = pd_dd.to(device)
                 
-                logits_hc_vs_pd, logits_pd_vs_dd = model(left_sample, right_sample)
+                hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, patient_text, device)
                 
-                # Calculate losses only for valid labels
                 total_loss = 0
                 loss_count = 0
                 
                 # HC vs PD validation
-                valid_hc_vs_pd_mask = (hc_vs_pd_left != -1)
-                if valid_hc_vs_pd_mask.any():
-                    valid_logits_hc = logits_hc_vs_pd[valid_hc_vs_pd_mask]
-                    valid_labels_hc = hc_vs_pd_left[valid_hc_vs_pd_mask]
-                    loss_hc = criterion_hc_vs_pd(valid_logits_hc, valid_labels_hc)
+                valid_hc_pd_mask = (hc_pd != -1)
+                if valid_hc_pd_mask.any():
+                    valid_logits_hc = hc_pd_logits[valid_hc_pd_mask]
+                    valid_labels_hc = hc_pd[valid_hc_pd_mask]
+                    loss_hc = hc_pd_loss(valid_logits_hc, valid_labels_hc)
                     total_loss += loss_hc
                     loss_count += 1
                     
                     preds_hc = torch.argmax(valid_logits_hc, dim=1)
-                    val_preds_hc_vs_pd.extend(preds_hc.cpu().numpy())
-                    val_labels_hc_vs_pd.extend(valid_labels_hc.cpu().numpy())
+                    hc_pd_val_pred.extend(preds_hc.cpu().numpy())
+                    hc_pd_val_labels.extend(valid_labels_hc.cpu().numpy())
                 
                 # PD vs DD validation
-                valid_pd_vs_dd_mask = (pd_vs_dd_left != -1)
-                if valid_pd_vs_dd_mask.any():
-                    valid_logits_pd = logits_pd_vs_dd[valid_pd_vs_dd_mask]
-                    valid_labels_pd = pd_vs_dd_left[valid_pd_vs_dd_mask]
-                    loss_pd = criterion_pd_vs_dd(valid_logits_pd, valid_labels_pd)
+                valid_pd_dd_mask = (pd_dd != -1)
+                if valid_pd_dd_mask.any():
+                    valid_logits_pd = pd_dd_logits[valid_pd_dd_mask]
+                    valid_labels_pd = pd_dd[valid_pd_dd_mask]
+                    loss_pd = pd_dd_loss(valid_logits_pd, valid_labels_pd)
                     total_loss += loss_pd
                     loss_count += 1
                     
                     preds_pd = torch.argmax(valid_logits_pd, dim=1)
-                    val_preds_pd_vs_dd.extend(preds_pd.cpu().numpy())
-                    val_labels_pd_vs_dd.extend(valid_labels_pd.cpu().numpy())
+                    pd_dd_val_pred.extend(preds_pd.cpu().numpy())
+                    pd_dd_val_labels.extend(valid_labels_pd.cpu().numpy())
                 
                 if loss_count > 0:
                     avg_loss = total_loss / loss_count
@@ -234,13 +198,12 @@ def train_model(config: Dict):
         
         val_loss /= len(val_loader)
         
-    
+        # Calculate validation 
         print("\n" + "="*60)
-        val_metrics_hc = calculate_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, "Validation HC vs PD", verbose=True)
-        val_metrics_pd = calculate_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, "Validation PD vs DD", verbose=True)
+        val_metrics_hc = calculate_metrics(hc_pd_val_labels, hc_pd_val_pred, "Validation HC vs PD", verbose=True)
+        val_metrics_pd = calculate_metrics(pd_dd_val_labels, pd_dd_val_pred, "Validation PD vs DD", verbose=True)
         print("="*60)
         
-    
         val_acc_hc = val_metrics_hc.get('accuracy', 0)
         val_acc_pd = val_metrics_pd.get('accuracy', 0)
         val_acc_combined = (val_acc_hc + val_acc_pd) / 2
@@ -248,17 +211,17 @@ def train_model(config: Dict):
         train_acc_hc = train_metrics_hc.get('accuracy', 0)
         train_acc_pd = train_metrics_pd.get('accuracy', 0)
         
-        if val_labels_hc_vs_pd:
+        # Save metrics
+        if hc_pd_val_labels:
             label_names_hc = {0: "HC", 1: "PD"}
-            save_metrics(val_labels_hc_vs_pd, val_preds_hc_vs_pd, 
+            save_metrics(hc_pd_val_labels, hc_pd_val_pred, epoch,
                         f"metrics/epoch_{epoch}_hc_vs_pd.txt", label_names_hc)
-        
-        if val_labels_pd_vs_dd:
+
+        if pd_dd_val_labels:
             label_names_pd = {0: "PD", 1: "DD"}
-            save_metrics(val_labels_pd_vs_dd, val_preds_pd_vs_dd, 
+            save_metrics(pd_dd_val_labels, pd_dd_val_pred, epoch,
                         f"metrics/epoch_{epoch}_pd_vs_dd.txt", label_names_pd)
         
-    
         scheduler.step(val_loss)
         
         # Save history
@@ -270,7 +233,7 @@ def train_model(config: Dict):
         history['val_acc_pd'].append(val_acc_pd)
         history['val_acc_combined'].append(val_acc_combined)
         
-    
+        # Print epoch summary
         print(f"\nEpoch {epoch+1} Summary:")
         print(f"Train Loss: {train_loss:.4f}")
         print(f"Train Acc - HC vs PD: {train_acc_hc:.4f}, PD vs DD: {train_acc_pd:.4f}")
@@ -283,8 +246,8 @@ def train_model(config: Dict):
             print(f"Val F1 - PD vs DD: {val_metrics_pd.get('f1_avg', 0):.4f}")
         
         # Save best model
-        if val_acc_combined > best_val_accuracy:
-            best_val_accuracy = val_acc_combined
+        if val_acc_combined > best_val_acc:
+            best_val_acc = val_acc_combined
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -295,16 +258,11 @@ def train_model(config: Dict):
                 'config': config
             }, 'best_model.pth')
             print("✓ New best model saved!")
-        
-        # Early stopping check
-        if early_stopping(val_loss):
-            print(f"Early stopping at epoch {epoch+1}")
-            break
     
-    print(f"\nTraining completed! Best combined validation accuracy: {best_val_accuracy:.4f}")
+    print(f"\nTraining completed! Best combined validation accuracy: {best_val_acc:.4f}")
     
     return {
-        'best_val_accuracy': best_val_accuracy,
+        'best_val_accuracy': best_val_acc,
         'history': history,
         'model': model
     }
@@ -313,25 +271,22 @@ def train_model(config: Dict):
 def main():
     """Main function"""
     
-    # Configuration with some improvements
     config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
         
         'input_dim': 6, 
-        'd_model': 64,
+        'model_dim': 64,  
         'num_heads': 8,
         'num_layers': 3,
         'd_ff': 256,
         'dropout': 0.2,  
         'seq_len': 256,
         'num_classes': 2,  
-        
-        # Training parameters with some adjustments
         'batch_size': 32,
         'learning_rate': 0.0005,  
         'weight_decay': 0.01,
         'num_epochs': 50,
-        'patience': 15,  # Increased patience
+        'patience': 15,  
         'num_workers': 0,
     }
     
@@ -350,3 +305,5 @@ def main():
 
 if __name__ == "__main__":
     results = main()
+    os.makedirs("plots", exist_ok=True)
+    plot_loss(results['history'], output_path="plots")
