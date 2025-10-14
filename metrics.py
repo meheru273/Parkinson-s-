@@ -332,3 +332,4 @@ def plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir="plots"):
         print(f"PD vs DD t-SNE plot saved to {output_path_pd}")
     
     return features_2d
+

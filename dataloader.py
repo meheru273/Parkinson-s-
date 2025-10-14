@@ -9,12 +9,13 @@ import warnings
 from scipy.signal import butter, filtfilt
 warnings.filterwarnings("ignore", category=UserWarning)
 
+from sklearn.model_selection import StratifiedKFold
+
 ###############Helper functions##########
 def create_windows(data, window_size=256, overlap=0):
-    """Create sliding windows from time series data"""
-    n_samples, n_channels = data.shape
     
-    step = int(window_size * (1 - overlap))   #step size
+    n_samples, n_channels = data.shape
+    step = int(window_size * (1 - overlap))   
     
     windows = []
     for start in range(0, n_samples - window_size + 1, step):
@@ -64,65 +65,84 @@ def prepare_text(metadata, questionnaires):
 
 
 ###############splitting methods################
-def k_fold_split_method(left_patient_samples, right_patient_samples, patient_labels_hc, 
-                        patient_labels_pd, patient_texts, patient_ids, k=10):
+def k_fold_split_method(data_root, full_dataset, k=5):
+    patient_conditions = {}
+    patients_template = pathlib.Path(data_root) / "patients" / "patient_{p:03d}.json"
     
-    unique_patients = sorted(list(set(patient_ids)))
-    n_patients = len(unique_patients)
+    for patient_id in range(1, 470):
+        patient_path = pathlib.Path(str(patients_template).format(p=patient_id))
+        if patient_path.exists():
+            try:
+                with open(patient_path, 'r') as f:
+                    condition = json.load(f).get('condition', 'Unknown')
+                    patient_conditions[patient_id] = condition
+            except:
+                pass
+            
+    patient_list = []
+    patient_labels = []
+    for pid in sorted(patient_conditions.keys()):
+        condition = patient_conditions[pid]
+        if condition == 'Healthy':
+            label = 0
+        elif 'Parkinson' in condition:
+            label = 1
+        else:
+            label = 2
+        patient_list.append(pid)
+        patient_labels.append(label)
     
-    np.random.seed(42)
-    np.random.shuffle(unique_patients)
+    print(f"Total patients: {len(patient_list)} (HC={patient_labels.count(0)}, PD={patient_labels.count(1)}, DD={patient_labels.count(2)})")
     
-    fold_size = n_patients // k
-    remainder = n_patients % k
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+    fold_datasets = []
     
-    patient_folds = []
-    start = 0
-    for i in range(k):
-        size = fold_size + (1 if i < remainder else 0)
-        patient_folds.append(unique_patients[start:start + size])
-        start += size
+    for fold_id, (train_idx, test_idx) in enumerate(skf.split(patient_list, patient_labels)):
+        train_patients = set([patient_list[i] for i in train_idx])
+        test_patients = set([patient_list[i] for i in test_idx])
         
-    all_folds = []
+        train_mask = np.array([pid in train_patients for pid in full_dataset.patient_ids])
+        test_mask = np.array([pid in test_patients for pid in full_dataset.patient_ids])
+        
+        train_dataset = type(full_dataset)(
+            data_root=None,
+            left_samples=full_dataset.left_samples[train_mask],
+            right_samples=full_dataset.right_samples[train_mask],
+            hc_vs_pd=full_dataset.hc_vs_pd[train_mask],
+            pd_vs_dd=full_dataset.pd_vs_dd[train_mask],
+            patient_texts=[full_dataset.patient_texts[i] for i, m in enumerate(train_mask) if m],
+            patient_ids=full_dataset.patient_ids[train_mask]
+        )
+        
+        test_dataset = type(full_dataset)(
+            data_root=None,
+            left_samples=full_dataset.left_samples[test_mask],
+            right_samples=full_dataset.right_samples[test_mask],
+            hc_vs_pd=full_dataset.hc_vs_pd[test_mask],
+            pd_vs_dd=full_dataset.pd_vs_dd[test_mask],
+            patient_texts=[full_dataset.patient_texts[i] for i, m in enumerate(test_mask) if m],
+            patient_ids=full_dataset.patient_ids[test_mask]
+        )
+        
+        # Print fold info
+        train_hc = np.sum(train_dataset.hc_vs_pd == 0)
+        train_pd = np.sum((train_dataset.hc_vs_pd == 1) & (train_dataset.pd_vs_dd == 0))
+        train_dd = np.sum(train_dataset.pd_vs_dd == 1)
+        test_hc = np.sum(test_dataset.hc_vs_pd == 0)
+        test_pd = np.sum((test_dataset.hc_vs_pd == 1) & (test_dataset.pd_vs_dd == 0))
+        test_dd = np.sum(test_dataset.pd_vs_dd == 1)
+        
+        print(f"\nFold {fold_id+1}/{k}:")
+        print(f"  Train: {len(train_dataset)} samples (HC={train_hc}, PD={train_pd}, DD={train_dd})")
+        print(f"  Test:  {len(test_dataset)} samples (HC={test_hc}, PD={test_pd}, DD={test_dd})")
+        
+        fold_datasets.append((train_dataset, test_dataset))
     
-    for fold_idx in range(k):
-        test_patients = set(patient_folds[fold_idx])
-        
-        train_indices = []
-        test_indices = []
-        
-        for idx, pid in enumerate(patient_ids):
-            if pid in test_patients:
-                test_indices.append(idx)
-            else:
-                train_indices.append(idx)
+    return fold_datasets
 
 
-        train_data = {
-            'left': left_patient_samples[train_indices],
-            'right': right_patient_samples[train_indices],
-            'hc_vs_pd': patient_labels_hc[train_indices],
-            'pd_vs_dd': patient_labels_pd[train_indices],
-            'texts': [patient_texts[i] for i in train_indices]
-        }
-        
-        test_data = {
-            'left': left_patient_samples[test_indices],
-            'right': right_patient_samples[test_indices],
-            'hc_vs_pd': patient_labels_hc[test_indices],
-            'pd_vs_dd': patient_labels_pd[test_indices],
-            'texts': [patient_texts[i] for i in test_indices]
-        }
-        
-        all_folds.append((train_data, test_data))
-        
-        print(f"Fold {fold_idx + 1}/{k}: Train samples: {len(train_indices)}, Test samples: {len(test_indices)}")
-    
-    return all_folds
-
-
-def split_signal_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, patient_texts, split_ratio=0.85):
-    """Current method - split by signal index"""
+def split_signal_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, patient_texts, 
+                       patient_ids=None, split_ratio=0.85):
     n_samples = len(left_samples)
     split_point = int(split_ratio * n_samples)
     
@@ -131,7 +151,8 @@ def split_signal_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, patient
         'right': right_samples[:split_point],
         'hc_vs_pd': hc_vs_pd[:split_point],
         'pd_vs_dd': pd_vs_dd[:split_point],
-        'texts': patient_texts[:split_point]
+        'texts': patient_texts[:split_point],
+        'patient_ids': patient_ids[:split_point] if patient_ids is not None else None
     }
     
     test_data = {
@@ -139,15 +160,15 @@ def split_signal_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, patient
         'right': right_samples[split_point:],
         'hc_vs_pd': hc_vs_pd[split_point:],
         'pd_vs_dd': pd_vs_dd[split_point:],
-        'texts': patient_texts[split_point:]
+        'texts': patient_texts[split_point:],
+        'patient_ids': patient_ids[split_point:] if patient_ids is not None else None
     }
     
     return train_data, test_data
 
 
 def task_wise_split_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, 
-                           patient_texts, task_names, train_tasks):
-    """Split by tasks - use certain tasks for training, others for testing"""
+                           patient_texts, task_names, patient_ids=None, train_tasks=None):
     train_indices = []
     test_indices = []
     
@@ -162,7 +183,8 @@ def task_wise_split_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd,
         'right': right_samples[train_indices],
         'hc_vs_pd': hc_vs_pd[train_indices],
         'pd_vs_dd': pd_vs_dd[train_indices],
-        'texts': [patient_texts[i] for i in train_indices]
+        'texts': [patient_texts[i] for i in train_indices],
+        'patient_ids': patient_ids[train_indices] if patient_ids is not None else None
     }
     
     test_data = {
@@ -170,7 +192,8 @@ def task_wise_split_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd,
         'right': right_samples[test_indices],
         'hc_vs_pd': hc_vs_pd[test_indices],
         'pd_vs_dd': pd_vs_dd[test_indices],
-        'texts': [patient_texts[i] for i in test_indices]
+        'texts': [patient_texts[i] for i in test_indices],
+        'patient_ids': patient_ids[test_indices] if patient_ids is not None else None
     }
     
     return train_data, test_data
@@ -182,8 +205,8 @@ class ParkinsonsDataLoader(Dataset):
     def __init__(self, data_root: str = None, window_size: int = 256, 
                  left_samples=None, right_samples=None, 
                  hc_vs_pd=None, pd_vs_dd=None, patient_texts=None,
-                 apply_dowsampling = True,
-                 apply_bandpass_filter = True, apply_prepare_text=True):
+                 apply_dowsampling=True,
+                 apply_bandpass_filter=True, apply_prepare_text=True, **kwargs):
         
         self.left_samples = []
         self.right_samples = []
@@ -196,10 +219,9 @@ class ParkinsonsDataLoader(Dataset):
         self.apply_dowsampling = apply_dowsampling
         self.apply_bandpass_filter = apply_bandpass_filter
         self.apply_prepare_text = apply_prepare_text
-
+        self.data_root = data_root
 
         if data_root is not None:
-            self.data_root = data_root
             self.window_size = window_size
             self.patients_template = pathlib.Path(data_root) / "patients" / "patient_{p:03d}.json"
             self.timeseries_template = pathlib.Path(data_root) / "movement" / "timeseries" / "{N:03d}_{X}_{Y}.txt"
@@ -225,6 +247,10 @@ class ParkinsonsDataLoader(Dataset):
                 self.pd_vs_dd = np.array(pd_vs_dd) if not isinstance(pd_vs_dd, np.ndarray) else pd_vs_dd
             if patient_texts is not None:
                 self.patient_texts = list(patient_texts) if not isinstance(patient_texts, list) else patient_texts
+        
+            self.patient_ids = kwargs.get('patient_ids', [])
+            if self.patient_ids is not None and len(self.patient_ids) > 0:
+                self.patient_ids = np.array(self.patient_ids) if not isinstance(self.patient_ids, np.ndarray) else self.patient_ids
 
 
     def _load_data(self):
@@ -247,12 +273,10 @@ class ParkinsonsDataLoader(Dataset):
                 except:
                     pass
 
-
                 if self.apply_prepare_text:
                     per_patient_text = prepare_text(metadata, questionnaire)
-                else :
+                else:
                     per_patient_text = ""
-
 
                 if condition == 'Healthy':
                     hc_vs_pd_label = 0  # Healthy
@@ -267,14 +291,12 @@ class ParkinsonsDataLoader(Dataset):
                     pd_vs_dd_label = 1   # Other disorders
                     overlap = 0.65
 
-
                 patient_left_samples = []
                 patient_right_samples = []
                 patient_sample_texts = []
                 patient_task_names = []
                 
                 for task in self.tasks:
-                    #insert task name 
                     left_path = pathlib.Path(str(self.timeseries_template).format(
                         N=patient_id, X=task, Y="LeftWrist"))
                     right_path = pathlib.Path(str(self.timeseries_template).format(
@@ -306,14 +328,12 @@ class ParkinsonsDataLoader(Dataset):
                             left_data = bandpass_filter(left_data)
                             right_data = bandpass_filter(right_data)
 
-
                         if left_data is None or right_data is None:
                             continue
                         
                         # Create windows
                         left_windows = create_windows(left_data, self.window_size, overlap=overlap)
                         right_windows = create_windows(right_data, self.window_size, overlap=overlap)
-
 
                         if left_windows is not None and right_windows is not None:
                             min_windows = min(len(left_windows), len(right_windows))
@@ -366,8 +386,8 @@ class ParkinsonsDataLoader(Dataset):
             split_ratio = kwargs.get('split_ratio', 0.85)
             train_data, test_data = split_signal_method(
                 self.left_samples, self.right_samples, 
-                self.hc_vs_pd, self.pd_vs_dd, self.patient_texts, 
-                split_ratio
+                self.hc_vs_pd, self.pd_vs_dd, self.patient_texts,
+                self.patient_ids, split_ratio
             )
             
             train_dataset = ParkinsonsDataLoader(
@@ -376,7 +396,8 @@ class ParkinsonsDataLoader(Dataset):
                 right_samples=train_data['right'],
                 hc_vs_pd=train_data['hc_vs_pd'],
                 pd_vs_dd=train_data['pd_vs_dd'],
-                patient_texts=train_data['texts']
+                patient_texts=train_data['texts'],
+                patient_ids=train_data['patient_ids']
             )
             
             test_dataset = ParkinsonsDataLoader(
@@ -385,7 +406,8 @@ class ParkinsonsDataLoader(Dataset):
                 right_samples=test_data['right'],
                 hc_vs_pd=test_data['hc_vs_pd'],
                 pd_vs_dd=test_data['pd_vs_dd'],
-                patient_texts=test_data['texts']
+                patient_texts=test_data['texts'],
+                patient_ids=test_data['patient_ids']
             )
             
             return train_dataset, test_dataset
@@ -396,7 +418,7 @@ class ParkinsonsDataLoader(Dataset):
             train_data, test_data = task_wise_split_method(
                 self.left_samples, self.right_samples,
                 self.hc_vs_pd, self.pd_vs_dd, self.patient_texts,
-                self.task_names, train_tasks
+                self.task_names, self.patient_ids, train_tasks
             )
             
             train_dataset = ParkinsonsDataLoader(
@@ -406,6 +428,7 @@ class ParkinsonsDataLoader(Dataset):
                 hc_vs_pd=train_data['hc_vs_pd'],
                 pd_vs_dd=train_data['pd_vs_dd'],
                 patient_texts=train_data['texts'],
+                patient_ids=train_data['patient_ids']
             )
             
             test_dataset = ParkinsonsDataLoader(
@@ -414,40 +437,16 @@ class ParkinsonsDataLoader(Dataset):
                 right_samples=test_data['right'],
                 hc_vs_pd=test_data['hc_vs_pd'],
                 pd_vs_dd=test_data['pd_vs_dd'],
-                patient_texts=test_data['texts']
+                patient_texts=test_data['texts'],
+                patient_ids=test_data['patient_ids']
             )
             
             return train_dataset, test_dataset
-        #k-fold split    
-        elif split_type == 3:
-            k = kwargs.get('k', 10)
-            all_folds = k_fold_split_method(
-                self.left_samples, self.right_samples,
-                self.hc_vs_pd, self.pd_vs_dd,
-                self.patient_texts, self.patient_ids, k
-            )
             
-            fold_datasets = []
-            for train_data, test_data in all_folds:
-                train_dataset = ParkinsonsDataLoader(
-                    data_root=None,
-                    left_samples=train_data['left'],
-                    right_samples=train_data['right'],
-                    hc_vs_pd=train_data['hc_vs_pd'],
-                    pd_vs_dd=train_data['pd_vs_dd'],
-                    patient_texts=train_data['texts']
-                )
-                
-                test_dataset = ParkinsonsDataLoader(
-                    data_root=None,
-                    left_samples=test_data['left'],
-                    right_samples=test_data['right'],
-                    hc_vs_pd=test_data['hc_vs_pd'],
-                    pd_vs_dd=test_data['pd_vs_dd'],
-                    patient_texts=test_data['texts']
-                )
-                
-                fold_datasets.append((train_dataset, test_dataset))
+        elif split_type == 3:
+            # K-fold split
+            k = kwargs.get('k', 10)
+            fold_datasets = k_fold_split_method(self.data_root, self, k)
             
             return fold_datasets
         
@@ -464,7 +463,8 @@ class ParkinsonsDataLoader(Dataset):
                 right_samples=self.right_samples[train_mask],
                 hc_vs_pd=self.hc_vs_pd[train_mask],
                 pd_vs_dd=self.pd_vs_dd[train_mask],
-                patient_texts=train_texts
+                patient_texts=train_texts,
+                patient_ids=self.patient_ids[train_mask] if len(self.patient_ids) > 0 else None
             )
             
             test_dataset = ParkinsonsDataLoader(
@@ -473,7 +473,8 @@ class ParkinsonsDataLoader(Dataset):
                 right_samples=self.right_samples[test_mask],
                 hc_vs_pd=self.hc_vs_pd[test_mask],
                 pd_vs_dd=self.pd_vs_dd[test_mask],
-                patient_texts=test_texts
+                patient_texts=test_texts,
+                patient_ids=self.patient_ids[test_mask] if len(self.patient_ids) > 0 else None
             )
             
             return train_dataset, test_dataset

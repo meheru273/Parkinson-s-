@@ -9,7 +9,7 @@ class TextTokenizer(nn.Module):
     def __init__(self, model_name='bert-base-uncased', output_dim=128, dropout=0.1):
         super().__init__()
         
-        self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        self.model_name = model_name
         self.bert = BertModel.from_pretrained(model_name)
         
         for param in self.bert.parameters():
@@ -25,13 +25,17 @@ class TextTokenizer(nn.Module):
         )
         
     def forward(self, text_list, device):
-        tokens = self.tokenizer(text_list, padding=True, truncation=True, max_length=512, return_tensors="pt")
+        tokenizer = BertTokenizer.from_pretrained(self.model_name)
+        tokens = tokenizer(text_list, padding=True, truncation=True, max_length=512, return_tensors="pt")
         
         input_ids = tokens['input_ids'].to(device)
         attention_mask = tokens['attention_mask'].to(device)
 
-        with torch.no_grad() if not self.training else torch.enable_grad():
+        if self.training:
             outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        else:
+            with torch.no_grad():
+                outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         
         output = outputs.pooler_output
         
@@ -76,7 +80,6 @@ class MultiheadAttention(nn.Module):
         K = self.w_k(key).view(batch_size, seq_len_k, self.num_heads, self.d_k).transpose(1, 2)
         V = self.w_v(value).view(batch_size, seq_len_k, self.num_heads, self.d_k).transpose(1, 2)
         
-
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
@@ -184,7 +187,8 @@ class DualChannelTransformer(nn.Module):
                 self.fusion_attention = nn.MultiheadAttention(
                     embed_dim=model_dim * 2,
                     num_heads=num_heads,
-                    dropout=dropout
+                    dropout=dropout,
+                    batch_first=True  
                 )
                 self.text_to_signal = nn.Linear(text_encoder_dim, model_dim * 2)
             else:
@@ -209,6 +213,48 @@ class DualChannelTransformer(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
+    def get_features(self, left_wrist, right_wrist, patient_texts=None, device=None):
+
+        left_encoded = self.left_projection(left_wrist)   
+        right_encoded = self.right_projection(right_wrist) 
+
+        left_encoded = self.positional_encoding(left_encoded)
+        right_encoded = self.positional_encoding(right_encoded)
+        
+        left_encoded = self.dropout(left_encoded)
+        right_encoded = self.dropout(right_encoded)
+        
+        for layer in self.layers:
+            left_encoded, right_encoded = layer(left_encoded, right_encoded)
+
+        left_pool = self.global_pool(left_encoded.transpose(1, 2)).squeeze(-1)
+        right_pool = self.global_pool(right_encoded.transpose(1, 2)).squeeze(-1)
+
+        fused_signal_features = torch.cat([left_pool, right_pool], dim=1)  
+        
+        if self.use_text and patient_texts is not None:
+            if device is None:
+                device = left_wrist.device
+            
+            text_features = self.text_encoder(patient_texts, device)
+            
+            if self.fusion_method == 'concat':
+                fused_features = torch.cat([fused_signal_features, text_features], dim=1)
+            elif self.fusion_method == 'attention':
+                text_transformed = self.text_to_signal(text_features).unsqueeze(1)
+                signal_features = fused_signal_features.unsqueeze(1)
+                
+                fused_output, _ = self.fusion_attention(
+                    query=signal_features,
+                    key=text_transformed,
+                    value=text_transformed
+                )
+                fused_features = fused_output.squeeze(1)
+        else:
+            fused_features = fused_signal_features
+            
+        return fused_features
+        
     def forward(self, left_wrist, right_wrist, patient_texts=None, device=None):
         
         left_encoded = self.left_projection(left_wrist)   
@@ -226,7 +272,6 @@ class DualChannelTransformer(nn.Module):
         left_pool = self.global_pool(left_encoded.transpose(1, 2)).squeeze(-1)
         right_pool = self.global_pool(right_encoded.transpose(1, 2)).squeeze(-1)
 
-
         fused_signal_features = torch.cat([left_pool, right_pool], dim=1)  
         
         if self.use_text and patient_texts is not None:
@@ -238,9 +283,8 @@ class DualChannelTransformer(nn.Module):
             if self.fusion_method == 'concat':
                 fused_features = torch.cat([fused_signal_features, text_features], dim=1)
             elif self.fusion_method == 'attention':
-                text_transformed = self.text_to_signal(text_features).unsqueeze(1)  
+                text_transformed = self.text_to_signal(text_features).unsqueeze(1)
                 signal_features = fused_signal_features.unsqueeze(1)  
-                
                 
                 fused_output, _ = self.fusion_attention(
                     query=signal_features,
