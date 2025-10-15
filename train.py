@@ -8,12 +8,13 @@ from collections import defaultdict
 import os
 import numpy as np
 import warnings
-from sklearn.metrics import roc_curve, auc, RocCurveDisplay
+
 warnings.filterwarnings('ignore')
 
 from dataloader import ParkinsonsDataLoader
 from model import DualChannelTransformer
 from metrics import plot_loss, plot_roc_curves, plot_tsne, save_fold_metric, calculate_metrics
+    
 
 def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device, use_text):
     """Train for one epoch"""
@@ -411,7 +412,7 @@ def main():
         'num_classes': 2,
         'use_text': False,
         
-        'batch_size': 30,
+        'batch_size': 64,
         'learning_rate': 0.0005,
         'weight_decay': 0.01,
         'num_epochs': 100,

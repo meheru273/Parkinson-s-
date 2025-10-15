@@ -10,13 +10,13 @@ from scipy.signal import butter, filtfilt
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
 
 ###############Helper functions##########
 def create_windows(data, window_size=256, overlap=0):
     
     n_samples, n_channels = data.shape
     step = int(window_size * (1 - overlap))   
-    
     windows = []
     for start in range(0, n_samples - window_size + 1, step):
         end = start + window_size
@@ -141,28 +141,68 @@ def k_fold_split_method(data_root, full_dataset, k=5):
     return fold_datasets
 
 
-def split_signal_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, patient_texts, 
-                       patient_ids=None, split_ratio=0.85):
-    n_samples = len(left_samples)
-    split_point = int(split_ratio * n_samples)
+def patient_level_split_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd, 
+                               patient_texts, patient_ids, split_ratio=0.85):
+    """
+    Split data at patient level using stratified sampling to maintain class balance.
+    """
+    # Get unique patients and their labels
+    unique_patients = np.unique(patient_ids)
+    patient_labels = []
+    
+    for pid in unique_patients:
+        # Get the label for this patient (all samples from same patient have same label)
+        patient_mask = patient_ids == pid
+        hc_vs_pd_label = hc_vs_pd[patient_mask][0]
+        pd_vs_dd_label = pd_vs_dd[patient_mask][0]
+        
+        # Create a combined label for stratification
+        if hc_vs_pd_label == 0:
+            label = 0  # Healthy
+        elif hc_vs_pd_label == 1 and pd_vs_dd_label == 0:
+            label = 1  # Parkinson's
+        else:
+            label = 2  # Other disorders
+        
+        patient_labels.append(label)
+    
+    patient_labels = np.array(patient_labels)
+    
+    train_patients, test_patients = train_test_split(
+        unique_patients, 
+        test_size=(1 - split_ratio),
+        stratify=patient_labels,
+        random_state=42
+    )
+    
+    train_patients = set(train_patients)
+    test_patients = set(test_patients)
+    
+    train_mask = np.array([pid in train_patients for pid in patient_ids])
+    test_mask = np.array([pid in test_patients for pid in patient_ids])
     
     train_data = {
-        'left': left_samples[:split_point],
-        'right': right_samples[:split_point],
-        'hc_vs_pd': hc_vs_pd[:split_point],
-        'pd_vs_dd': pd_vs_dd[:split_point],
-        'texts': patient_texts[:split_point],
-        'patient_ids': patient_ids[:split_point] if patient_ids is not None else None
+        'left': left_samples[train_mask],
+        'right': right_samples[train_mask],
+        'hc_vs_pd': hc_vs_pd[train_mask],
+        'pd_vs_dd': pd_vs_dd[train_mask],
+        'texts': [patient_texts[i] for i, m in enumerate(train_mask) if m],
+        'patient_ids': patient_ids[train_mask]
     }
     
     test_data = {
-        'left': left_samples[split_point:],
-        'right': right_samples[split_point:],
-        'hc_vs_pd': hc_vs_pd[split_point:],
-        'pd_vs_dd': pd_vs_dd[split_point:],
-        'texts': patient_texts[split_point:],
-        'patient_ids': patient_ids[split_point:] if patient_ids is not None else None
+        'left': left_samples[test_mask],
+        'right': right_samples[test_mask],
+        'hc_vs_pd': hc_vs_pd[test_mask],
+        'pd_vs_dd': pd_vs_dd[test_mask],
+        'texts': [patient_texts[i] for i, m in enumerate(test_mask) if m],
+        'patient_ids': patient_ids[test_mask]
     }
+    
+    # Print split info
+    print(f"\nPatient-level split:")
+    print(f"  Train: {len(train_patients)} patients, {len(train_data['left'])} samples")
+    print(f"  Test: {len(test_patients)} patients, {len(test_data['left'])} samples")
     
     return train_data, test_data
 
@@ -212,7 +252,7 @@ class ParkinsonsDataLoader(Dataset):
         self.right_samples = []
         self.hc_vs_pd = []
         self.pd_vs_dd = []
-        self.sample_splits = []
+        self.sample_splits = []  # DEPRECATED: no longer used for splitting
         self.patient_texts = []
         self.patient_ids = []  
         self.task_names = []   
@@ -360,12 +400,6 @@ class ParkinsonsDataLoader(Dataset):
                         self.pd_vs_dd.append(pd_vs_dd_label)
                         self.patient_ids.append(patient_id)
                         self.task_names.append(patient_task_names[i])
-                        
-                        # Simple split for backwards compatibility
-                        if i < int(0.85 * n_samples):
-                            self.sample_splits.append(0)  # train
-                        else:
-                            self.sample_splits.append(1)  # test
                 
             except Exception as e:
                 print(f"Error loading patient {patient_id}: {e}")
@@ -375,16 +409,19 @@ class ParkinsonsDataLoader(Dataset):
         self.right_samples = np.array(self.right_samples)
         self.hc_vs_pd = np.array(self.hc_vs_pd)
         self.pd_vs_dd = np.array(self.pd_vs_dd)
-        self.sample_splits = np.array(self.sample_splits)
         self.patient_ids = np.array(self.patient_ids)
         self.task_names = np.array(self.task_names)
 
 
     def get_train_test_split(self, split_type=1, **kwargs):
         if split_type == 1:
-            # Signal-based split
+            # Patient-level split with stratification
             split_ratio = kwargs.get('split_ratio', 0.85)
-            train_data, test_data = split_signal_method(
+            
+            if len(self.patient_ids) == 0:
+                raise ValueError("Patient IDs are required for patient-level split")
+            
+            train_data, test_data = patient_level_split_method(
                 self.left_samples, self.right_samples, 
                 self.hc_vs_pd, self.pd_vs_dd, self.patient_texts,
                 self.patient_ids, split_ratio
@@ -444,40 +481,18 @@ class ParkinsonsDataLoader(Dataset):
             return train_dataset, test_dataset
             
         elif split_type == 3:
-            # K-fold split
+            # K-fold split (patient-level)
             k = kwargs.get('k', 10)
+            
+            if self.data_root is None:
+                raise ValueError("data_root is required for K-fold split")
+            
             fold_datasets = k_fold_split_method(self.data_root, self, k)
             
             return fold_datasets
         
         else:
-            train_mask = self.sample_splits == 0
-            test_mask = self.sample_splits == 1
-            
-            train_texts = [self.patient_texts[i] for i in range(len(self.patient_texts)) if train_mask[i]]
-            test_texts = [self.patient_texts[i] for i in range(len(self.patient_texts)) if test_mask[i]]
-            
-            train_dataset = ParkinsonsDataLoader(
-                data_root=None,
-                left_samples=self.left_samples[train_mask],
-                right_samples=self.right_samples[train_mask],
-                hc_vs_pd=self.hc_vs_pd[train_mask],
-                pd_vs_dd=self.pd_vs_dd[train_mask],
-                patient_texts=train_texts,
-                patient_ids=self.patient_ids[train_mask] if len(self.patient_ids) > 0 else None
-            )
-            
-            test_dataset = ParkinsonsDataLoader(
-                data_root=None,
-                left_samples=self.left_samples[test_mask],
-                right_samples=self.right_samples[test_mask],
-                hc_vs_pd=self.hc_vs_pd[test_mask],
-                pd_vs_dd=self.pd_vs_dd[test_mask],
-                patient_texts=test_texts,
-                patient_ids=self.patient_ids[test_mask] if len(self.patient_ids) > 0 else None
-            )
-            
-            return train_dataset, test_dataset
+            raise ValueError(f"Invalid split_type: {split_type}. Use 1 (patient-level), 2 (task-based), or 3 (k-fold)")
 
 
     def __len__(self):
