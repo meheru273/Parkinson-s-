@@ -4,6 +4,7 @@ import json
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from sklearn.manifold import TSNE
+from sklearn.metrics import roc_curve, auc
 ################EvaluationFunctions###########
 def calculate_metrics(y_true, y_pred, task_name="", verbose=True):
     if len(y_true) == 0:

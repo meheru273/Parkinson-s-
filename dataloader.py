@@ -252,6 +252,7 @@ class ParkinsonsDataLoader(Dataset):
         self.right_samples = []
         self.hc_vs_pd = []
         self.pd_vs_dd = []
+        self.sample_splits = []  # DEPRECATED: no longer used for splitting
         self.patient_texts = []
         self.patient_ids = []  
         self.task_names = []   
