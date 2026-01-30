@@ -1,0 +1,419 @@
+{
+  "task_name": "CrossArms",
+  "total_samples": 974,
+  "total_inferences": 6,
+  "duration_seconds": 4.00508713722229,
+  "avg_sample_rate_hz": 243.19071386684317,
+  "timing": {
+    "avg_inference_time_ms": 47.205050786336265,
+    "total_inference_time_ms": 283.2303047180176
+  },
+  "power": {
+    "num_measurements": 31,
+    "duration_seconds": 3.854360342025757,
+    "cpu_percent_avg": 0.0,
+    "cpu_percent_max": 0.0,
+    "cpu_percent_min": 0.0,
+    "cpu_temp_avg": 42.66290322580646,
+    "cpu_temp_max": 43.55,
+    "cpu_temp_min": 41.35,
+    "cpu_voltage_avg": 0.8143999999999998,
+    "cpu_voltage_max": 0.8144,
+    "cpu_voltage_min": 0.8144,
+    "cpu_freq_mhz_avg": 2400.0,
+    "cpu_freq_mhz_max": 2400.0,
+    "cpu_freq_mhz_min": 2400.0,
+    "memory_percent_avg": 10.62903225806452,
+    "memory_percent_max": 10.9,
+    "memory_percent_min": 10.4,
+    "memory_mb_avg": 857.5912298387096,
+    "memory_mb_max": 876.484375,
+    "memory_mb_min": 835.9375
+  },
+  "predictions": {},
+  "detailed_predictions": [
+    {
+      "timestamp": "2026-01-22T00:02:53.787216",
+      "inference_num": 1,
+      "hc_vs_pd_prediction": "Parkinsons",
+      "hc_vs_pd_confidence": 91.38594269752502,
+      "hc_vs_pd_probs": [
+        0.08614055067300797,
+        0.9138594269752502
+      ],
+      "pd_vs_dd_prediction": "Parkinsons",
+      "pd_vs_dd_confidence": 89.5174503326416,
+      "pd_vs_dd_probs": [
+        0.895174503326416,
+        0.10482543706893921
+      ],
+      "inference_time_ms": 47.566890716552734
+    },
+    {
+      "timestamp": "2026-01-22T00:02:54.314598",
+      "inference_num": 2,
+      "hc_vs_pd_prediction": "Healthy",
+      "hc_vs_pd_confidence": 99.99969005584717,
+      "hc_vs_pd_probs": [
+        0.9999969005584717,
+        3.0657499792141607e-06
+      ],
+      "pd_vs_dd_prediction": "Other Disorder",
+      "pd_vs_dd_confidence": 99.99974966049194,
+      "pd_vs_dd_probs": [
+        2.495135731805931e-06,
+        0.9999974966049194
+      ],
+      "inference_time_ms": 47.11318016052246
+    },
+    {
+      "timestamp": "2026-01-22T00:02:54.945110",
+      "inference_num": 3,
+      "hc_vs_pd_prediction": "Healthy",
+      "hc_vs_pd_confidence": 94.07038688659668,
+      "hc_vs_pd_probs": [
+        0.9407038688659668,
+        0.0592961311340332
+      ],
+      "pd_vs_dd_prediction": "Other Disorder",
+      "pd_vs_dd_confidence": 99.90273714065552,
+      "pd_vs_dd_probs": [
+        0.0009726342977955937,
+        0.9990273714065552
+      ],
+      "inference_time_ms": 46.76985740661621
+    },
+    {
+      "timestamp": "2026-01-22T00:02:55.471293",
+      "inference_num": 4,
+      "hc_vs_pd_prediction": "Healthy",
+      "hc_vs_pd_confidence": 99.99969005584717,
+      "hc_vs_pd_probs": [
+        0.9999969005584717,
+        3.0853957468934823e-06
+      ],
+      "pd_vs_dd_prediction": "Other Disorder",
+      "pd_vs_dd_confidence": 99.99990463256836,
+      "pd_vs_dd_probs": [
+        9.309039228355687e-07,
+        0.9999990463256836
+      ],
+      "inference_time_ms": 45.98259925842285
+    },
+    {
+      "timestamp": "2026-01-22T00:02:56.103262",
+      "inference_num": 5,
+      "hc_vs_pd_prediction": "Healthy",
+      "hc_vs_pd_confidence": 100.0,
+      "hc_vs_pd_probs": [
+        1.0,
+        3.263860293145626e-08
+      ],
+      "pd_vs_dd_prediction": "Other Disorder",
+      "pd_vs_dd_confidence": 99.99998807907104,
+      "pd_vs_dd_probs": [
+        6.022676757311274e-08,
+        0.9999998807907104
+      ],
+      "inference_time_ms": 48.47598075866699
+    },
+    {
+      "timestamp": "2026-01-22T00:02:56.630536",
+      "inference_num": 6,
+      "hc_vs_pd_prediction": "Parkinsons",
+      "hc_vs_pd_confidence": 99.99905824661255,
+      "hc_vs_pd_probs": [
+        9.422406947123818e-06,
+        0.9999905824661255
+      ],
+      "pd_vs_dd_prediction": "Parkinsons",
+      "pd_vs_dd_confidence": 99.99943971633911,
+      "pd_vs_dd_probs": [
+        0.9999943971633911,
+        5.548235549213132e-06
+      ],
+      "inference_time_ms": 47.32179641723633
+    }
+  ],
+  "detailed_power_measurements": [
+    {
+      "timestamp": 1769018572.9082904,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.4,
+      "memory_mb": 835.9375
+    },
+    {
+      "timestamp": 1769018573.038744,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.4,
+      "memory_mb": 836.640625
+    },
+    {
+      "timestamp": 1769018573.1687338,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.55,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.4,
+      "memory_mb": 836.640625
+    },
+    {
+      "timestamp": 1769018573.2987795,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.4,
+      "memory_mb": 836.640625
+    },
+    {
+      "timestamp": 1769018573.4289572,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.4,
+      "memory_mb": 836.640625
+    },
+    {
+      "timestamp": 1769018573.5354483,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.4,
+      "memory_mb": 836.640625
+    },
+    {
+      "timestamp": 1769018573.684949,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.5,
+      "memory_mb": 844.609375
+    },
+    {
+      "timestamp": 1769018573.811388,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.5,
+      "memory_mb": 845.546875
+    },
+    {
+      "timestamp": 1769018573.941336,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.5,
+      "memory_mb": 845.546875
+    },
+    {
+      "timestamp": 1769018574.063284,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.55,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.5,
+      "memory_mb": 845.546875
+    },
+    {
+      "timestamp": 1769018574.212357,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 856.5625
+    },
+    {
+      "timestamp": 1769018574.323414,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 856.5625
+    },
+    {
+      "timestamp": 1769018574.4533324,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 856.796875
+    },
+    {
+      "timestamp": 1769018574.583199,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.55,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 856.796875
+    },
+    {
+      "timestamp": 1769018574.6929998,
+      "cpu_percent": 0.0,
+      "cpu_temp": 41.9,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 856.796875
+    },
+    {
+      "timestamp": 1769018574.8428745,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.7,
+      "memory_mb": 866.40625
+    },
+    {
+      "timestamp": 1769018574.9660141,
+      "cpu_percent": 0.0,
+      "cpu_temp": 41.35,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.7,
+      "memory_mb": 866.40625
+    },
+    {
+      "timestamp": 1769018575.0959415,
+      "cpu_percent": 0.0,
+      "cpu_temp": 41.9,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.7,
+      "memory_mb": 866.640625
+    },
+    {
+      "timestamp": 1769018575.2210832,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 866.875
+    },
+    {
+      "timestamp": 1769018575.3690612,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.9,
+      "memory_mb": 876.484375
+    },
+    {
+      "timestamp": 1769018575.4767604,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.9,
+      "memory_mb": 876.484375
+    },
+    {
+      "timestamp": 1769018575.6065056,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 871.390625
+    },
+    {
+      "timestamp": 1769018575.736286,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 871.296875
+    },
+    {
+      "timestamp": 1769018575.850481,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 870.90625
+    },
+    {
+      "timestamp": 1769018576.000951,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 873.109375
+    },
+    {
+      "timestamp": 1769018576.1208425,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 873.34375
+    },
+    {
+      "timestamp": 1769018576.2504325,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.55,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 873.34375
+    },
+    {
+      "timestamp": 1769018576.3789468,
+      "cpu_percent": 0.0,
+      "cpu_temp": 41.9,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.8,
+      "memory_mb": 873.34375
+    },
+    {
+      "timestamp": 1769018576.528233,
+      "cpu_percent": 0.0,
+      "cpu_temp": 42.45,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 858.703125
+    },
+    {
+      "timestamp": 1769018576.6327147,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 858.34375
+    },
+    {
+      "timestamp": 1769018576.7626507,
+      "cpu_percent": 0.0,
+      "cpu_temp": 43.0,
+      "cpu_voltage": 0.8144,
+      "cpu_freq_mhz": 2400.0,
+      "memory_percent": 10.6,
+      "memory_mb": 858.34375
+    }
+  ]
+}

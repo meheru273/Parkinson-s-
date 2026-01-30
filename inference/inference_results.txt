@@ -1,0 +1,31 @@
+================================================================================
+PARKINSON'S DETECTION INFERENCE RESULTS
+Timestamp: 2026-01-17 23:56:50
+================================================================================
+
+PREDICTIONS:
+--------------------------------------------------------------------------------
+HC vs PD Classification: Healthy Control (confidence: 77.27%)
+PD vs DD Classification: Other Disorder detected (confidence: 96.72%)
+
+Detailed Probabilities:
+  HC vs PD - Healthy: 77.27%, PD: 22.73%
+  PD vs DD - PD: 3.28%, DD: 96.72%
+
+================================================================================
+
+PERFORMANCE METRICS:
+--------------------------------------------------------------------------------
+Average Inference Time: 48.87 ms
+Standard Deviation: 4.52 ms
+Min Inference Time: 46.70 ms
+Max Inference Time: 62.86 ms
+Average FPS: 20.46
+
+System Resources:
+Average CPU Usage: 0.2%
+Average RAM Usage: 816.1 MB
+Average CPU Temperature: 42.5°C
+Max CPU Temperature: 43.5°C
+
+================================================================================

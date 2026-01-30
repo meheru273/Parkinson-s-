@@ -55,46 +55,6 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)
         return x + self.pe[:seq_len, :].unsqueeze(0) 
 
-class MultiheadAttention(nn.Module):
-    def __init__(self, model_dim: int, num_heads: int, dropout: float = 0.1):
-        super().__init__()
-        assert model_dim % num_heads == 0
-        
-        self.model_dim = model_dim
-        self.num_heads = num_heads
-        self.d_k = model_dim // num_heads
-        
-        self.w_q = nn.Linear(model_dim, model_dim)
-        self.w_k = nn.Linear(model_dim, model_dim)
-        self.w_v = nn.Linear(model_dim, model_dim)
-        self.w_o = nn.Linear(model_dim, model_dim)
-        
-        self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(model_dim)
-    
-    def forward(self, query, key, value, mask=None):
-        batch_size, seq_len_q, model_dim = query.size()
-        seq_len_k = key.size(1)
-    
-        Q = self.w_q(query).view(batch_size, seq_len_q, self.num_heads, self.d_k).transpose(1, 2)
-        K = self.w_k(key).view(batch_size, seq_len_k, self.num_heads, self.d_k).transpose(1, 2)
-        V = self.w_v(value).view(batch_size, seq_len_k, self.num_heads, self.d_k).transpose(1, 2)
-        
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
-
-        attention_w = F.softmax(scores, dim=-1)
-        attention_w = self.dropout(attention_w)
-        
-        context = torch.matmul(attention_w, V)
-        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len_q, self.model_dim)
-        
-        output = self.w_o(context)
-        output = self.layer_norm(output + query)  # Residual connection
-        
-        return output, attention_w
-
 
 class FeedForward(nn.Module):
     def __init__(self, model_dim: int, d_ff: int, dropout: float = 0.1):
@@ -110,7 +70,7 @@ class FeedForward(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         x = self.linear2(x)
-        x = self.layer_norm(x + residual)  # Residual connection
+        x = self.layer_norm(x + residual)
         return x
 
 
@@ -118,22 +78,36 @@ class CrossAttention(nn.Module):
     def __init__(self, model_dim: int, num_heads: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
         
-        self.cross_attention_1to2 = MultiheadAttention(model_dim, num_heads, dropout)
-        self.cross_attention_2to1 = MultiheadAttention(model_dim, num_heads, dropout)
-        self.self_attention_1 = MultiheadAttention(model_dim, num_heads, dropout)
-        self.self_attention_2 = MultiheadAttention(model_dim, num_heads, dropout)
+        self.cross_attention_1to2 = nn.MultiheadAttention(embed_dim=model_dim,num_heads=num_heads,dropout=dropout,batch_first=True)
+        self.cross_attention_2to1 = nn.MultiheadAttention(embed_dim=model_dim,num_heads=num_heads,dropout=dropout,batch_first=True)
+        
+        self.self_attention_1 = nn.MultiheadAttention(embed_dim=model_dim,num_heads=num_heads,dropout=dropout,batch_first=True)
+        self.self_attention_2 = nn.MultiheadAttention(embed_dim=model_dim,num_heads=num_heads,dropout=dropout,batch_first=True)
+        
+        
+        # Layer norms for residual connections
+        self.norm_cross_1 = nn.LayerNorm(model_dim)
+        self.norm_cross_2 = nn.LayerNorm(model_dim)
+        self.norm_self_1 = nn.LayerNorm(model_dim)
+        self.norm_self_2 = nn.LayerNorm(model_dim)
         
         self.feed_forward_1 = FeedForward(model_dim, d_ff, dropout)       
         self.feed_forward_2 = FeedForward(model_dim, d_ff, dropout)
         
     def forward(self, channel_1, channel_2):
-        # Cross attention
-        channel_1_cross, _ = self.cross_attention_1to2(query=channel_1, key=channel_2, value=channel_2)
-        channel_2_cross, _ = self.cross_attention_2to1(query=channel_2, key=channel_1, value=channel_1)
+        # Cross attention with residual connections
+        channel_1_cross_attn, _ = self.cross_attention_1to2(query=channel_1,key=channel_2,value=channel_2)
+        channel_1_cross = self.norm_cross_1(channel_1 + channel_1_cross_attn)
         
-        # Self attention
-        channel_1_self, _ = self.self_attention_1(query=channel_1_cross, key=channel_1_cross, value=channel_1_cross)
-        channel_2_self, _ = self.self_attention_2(query=channel_2_cross, key=channel_2_cross, value=channel_2_cross)
+        channel_2_cross_attn, _ = self.cross_attention_2to1(query=channel_2,key=channel_1,value=channel_1)
+        channel_2_cross = self.norm_cross_2(channel_2 + channel_2_cross_attn)
+        
+        # Self attention with residual connections
+        channel_1_self_attn, _ = self.self_attention_1(query=channel_1_cross,key=channel_1_cross,value=channel_1_cross)
+        channel_1_self = self.norm_self_1(channel_1_cross + channel_1_self_attn)
+        
+        channel_2_self_attn, _ = self.self_attention_2(query=channel_2_cross,key=channel_2_cross,value=channel_2_cross)
+        channel_2_self = self.norm_self_2(channel_2_cross + channel_2_self_attn)
         
         # Feed forward
         channel_1_out = self.feed_forward_1(channel_1_self)

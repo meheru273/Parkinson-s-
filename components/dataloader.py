@@ -156,7 +156,6 @@ def patient_level_split_method(left_samples, right_samples, hc_vs_pd, pd_vs_dd,
         hc_vs_pd_label = hc_vs_pd[patient_mask][0]
         pd_vs_dd_label = pd_vs_dd[patient_mask][0]
         
-        # Create a combined label for stratification
         if hc_vs_pd_label == 0:
             label = 0  # Healthy
         elif hc_vs_pd_label == 1 and pd_vs_dd_label == 0:
@@ -252,7 +251,6 @@ class ParkinsonsDataLoader(Dataset):
         self.right_samples = []
         self.hc_vs_pd = []
         self.pd_vs_dd = []
-        self.sample_splits = []  # DEPRECATED: no longer used for splitting
         self.patient_texts = []
         self.patient_ids = []  
         self.task_names = []   
