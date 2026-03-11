@@ -372,25 +372,32 @@ class CrossAttention(nn.Module):
         self.feed_forward_1 = FeedForward(model_dim, d_ff, dropout)       
         self.feed_forward_2 = FeedForward(model_dim, d_ff, dropout)
         
-    def forward(self, channel_1, channel_2):
+    def forward(self, channel_1, channel_2, return_weights=False):
         # Cross attention with residual connections
-        channel_1_cross_attn, _ = self.cross_attention_1to2(query=channel_1,key=channel_2,value=channel_2)
+        channel_1_cross_attn, w_cross_1to2 = self.cross_attention_1to2(query=channel_1,key=channel_2,value=channel_2, need_weights=return_weights, average_attn_weights=False)
         channel_1_cross = self.norm_cross_1(channel_1 + channel_1_cross_attn)
         
-        channel_2_cross_attn, _ = self.cross_attention_2to1(query=channel_2,key=channel_1,value=channel_1)
+        channel_2_cross_attn, w_cross_2to1 = self.cross_attention_2to1(query=channel_2,key=channel_1,value=channel_1, need_weights=return_weights, average_attn_weights=False)
         channel_2_cross = self.norm_cross_2(channel_2 + channel_2_cross_attn)
         
         # Self attention with residual connections
-        channel_1_self_attn, _ = self.self_attention_1(query=channel_1_cross,key=channel_1_cross,value=channel_1_cross)
+        channel_1_self_attn, w_self_1 = self.self_attention_1(query=channel_1_cross,key=channel_1_cross,value=channel_1_cross, need_weights=return_weights, average_attn_weights=False)
         channel_1_self = self.norm_self_1(channel_1_cross + channel_1_self_attn)
         
-        channel_2_self_attn, _ = self.self_attention_2(query=channel_2_cross,key=channel_2_cross,value=channel_2_cross)
+        channel_2_self_attn, w_self_2 = self.self_attention_2(query=channel_2_cross,key=channel_2_cross,value=channel_2_cross, need_weights=return_weights, average_attn_weights=False)
         channel_2_self = self.norm_self_2(channel_2_cross + channel_2_self_attn)
         
         # Feed forward
         channel_1_out = self.feed_forward_1(channel_1_self)
         channel_2_out = self.feed_forward_2(channel_2_self)
 
+        if return_weights:
+            return channel_1_out, channel_2_out, {
+                'cross_left_to_right': w_cross_1to2,   # (batch, heads, seq, seq)
+                'cross_right_to_left': w_cross_2to1,
+                'self_left': w_self_1,
+                'self_right': w_self_2,
+            }
         return channel_1_out, channel_2_out
 
 
@@ -492,6 +499,30 @@ class MainModel(nn.Module):
         logits_pd_vs_dd = self.head_pd_vs_dd(fused_features)
 
         return logits_hc_vs_pd, logits_pd_vs_dd
+
+    def get_attention_weights(self, left_wrist, right_wrist, device=None):
+        """Forward pass that returns per-layer attention weight dicts.
+        
+        Returns:
+            all_weights: list of dicts, one per layer, each containing
+                'cross_left_to_right', 'cross_right_to_left',
+                'self_left', 'self_right'  — each (batch, heads, seq, seq)
+        """
+        self.eval()
+        with torch.no_grad():
+            left_encoded = self.left_projection(left_wrist)
+            right_encoded = self.right_projection(right_wrist)
+            left_encoded = self.positional_encoding(left_encoded)
+            right_encoded = self.positional_encoding(right_encoded)
+            left_encoded = self.dropout(left_encoded)
+            right_encoded = self.dropout(right_encoded)
+
+            all_weights = []
+            for layer in self.layers:
+                left_encoded, right_encoded, weights = layer(left_encoded, right_encoded, return_weights=True)
+                all_weights.append(weights)
+
+        return all_weights
     
 
 ################EvaluationFunctions###########
@@ -671,6 +702,65 @@ def plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir="plots"):
         print("[saved] tsne_pd_vs_dd.png")
 
     return features_2d
+
+
+def plot_attention_weights(model, dataloader, device, output_dir="plots", num_samples=1):
+    """Extract and plot attention weight heatmaps for a few samples.
+    
+    Generates one figure per sample showing attention maps across all layers
+    with four attention types: Cross L→R, Cross R→L, Self-Left, Self-Right.
+    Weights are averaged over all heads for each attention type.
+    """
+    model.eval()
+    os.makedirs(output_dir, exist_ok=True)
+    
+    samples_plotted = 0
+    for batch in dataloader:
+        left_sample, right_sample = batch[0], batch[1]
+        left_sample = left_sample.to(device)
+        right_sample = right_sample.to(device)
+        
+        all_weights = model.get_attention_weights(left_sample, right_sample, device)
+        num_layers = len(all_weights)
+        
+        batch_size = left_sample.size(0)
+        for sample_idx in range(min(batch_size, num_samples - samples_plotted)):
+            attn_types = ['cross_left_to_right', 'cross_right_to_left', 'self_left', 'self_right']
+            attn_titles = ['Cross Left→Right', 'Cross Right→Left', 'Self-Attention Left', 'Self-Attention Right']
+            
+            fig, axes = plt.subplots(num_layers, 4, figsize=(20, 5 * num_layers))
+            if num_layers == 1:
+                axes = axes[np.newaxis, :]  # ensure 2D indexing
+            
+            fig.suptitle(f'Attention Weights — Sample {samples_plotted + 1}', fontsize=16, y=1.02)
+            
+            for layer_idx in range(num_layers):
+                for col_idx, (attn_key, attn_title) in enumerate(zip(attn_types, attn_titles)):
+                    w = all_weights[layer_idx][attn_key]  # (batch, heads, seq, seq)
+                    # Average over heads for this sample
+                    w_sample = w[sample_idx].mean(dim=0).cpu().numpy()  # (seq, seq)
+                    
+                    ax = axes[layer_idx, col_idx]
+                    im = ax.imshow(w_sample, aspect='auto', cmap='viridis')
+                    ax.set_title(f'Layer {layer_idx+1}: {attn_title}', fontsize=10)
+                    ax.set_xlabel('Key Position')
+                    ax.set_ylabel('Query Position')
+                    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+            plt.tight_layout()
+            save_path = os.path.join(output_dir, f'attention_weights_sample_{samples_plotted + 1}.png')
+            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"[saved] {save_path}")
+            
+            samples_plotted += 1
+            if samples_plotted >= num_samples:
+                break
+        
+        if samples_plotted >= num_samples:
+            break
+    
+    print(f"Plotted attention weights for {samples_plotted} sample(s)")
 
 
 ###################trainer################ 
@@ -854,7 +944,11 @@ def train_model(config):
     
     all_fold_results = []
     
-    for fold_idx in range(num_folds):
+    max_folds = config.get('max_folds_to_train', num_folds)
+    folds_to_train = min(num_folds, max_folds)
+    print(f"Training {folds_to_train} out of {num_folds} folds")
+    
+    for fold_idx in range(folds_to_train):
         
         
         if num_folds > 1:
@@ -882,7 +976,7 @@ def train_model(config):
         
         optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
         
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
         
         hc_pd_loss = nn.CrossEntropyLoss()
         pd_dd_loss = nn.CrossEntropyLoss()
@@ -1003,6 +1097,18 @@ def train_model(config):
                     'config': config
                 }, model_save_name)
                 print(f"✓ New best model saved: {model_save_name}")
+                
+                # Save config.json alongside the model
+                config_save_name = model_save_name.replace('.pth', '_config.json')
+                config_to_save = {k: v for k, v in config.items()}
+                config_to_save['best_epoch'] = epoch + 1
+                config_to_save['best_val_acc_combined'] = val_acc_combined
+                config_to_save['best_val_acc_hc'] = val_acc_hc
+                config_to_save['best_val_acc_pd'] = val_acc_pd
+                config_to_save['fold'] = fold_idx if num_folds > 1 else None
+                with open(config_save_name, 'w') as f:
+                    json.dump(config_to_save, f, indent=2)
+                print(f"✓ Config saved: {config_save_name}")
         
         if config.get('save_metrics', True):
             fold_suffix = f"_fold_{fold_idx+1}" if num_folds > 1 else ""
@@ -1041,14 +1147,23 @@ def train_model(config):
             
             if fold_features is not None:
                 plot_tsne(fold_features, fold_hc_pd_labels, fold_pd_dd_labels, output_dir=plot_dir)
+            
+            # Plot attention weight heatmaps
+            plot_attention_weights(model, val_loader, device, output_dir=plot_dir, num_samples=3)
     
     return all_fold_results
 
 
 def main():
-    """Main function with configurable parameters"""
+    """Main function with configurable parameters.
+    Set USE_NESTED_CV = True  for nested cross-validation hyperparameters.
+    Set USE_NESTED_CV = False for initial cross-validation hyperparameters.
+    """
     
-    config = {
+    USE_NESTED_CV = False   # <-- Toggle between initial CV and nested CV hyperparameters
+    
+    # ---------- shared settings ----------
+    base_config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
         'apply_downsampling': True,
         'apply_bandpass_filter': True,
@@ -1056,25 +1171,45 @@ def main():
         'split_ratio': 0.85,
         'train_tasks': None,
         'num_folds': 5,
-        
         'input_dim': 6,
+        'timestep': 256,
+        'num_classes': 2,
+        'num_epochs': 100,
+        'num_workers': 0,
+        'save_metrics': True,
+        'create_plots': True,
+        'max_folds_to_train': 1,
+    }
+    
+    # ---------- initial cross-validation hyperparameters ----------
+    initial_cv_config = {
+        'model_dim': 64,
+        'num_heads': 8,
+        'num_layers': 3,
+        'd_ff': 256,
+        'dropout': 0.2,
+        'batch_size': 32,
+        'learning_rate': 0.0005,
+        'weight_decay': 0.01,
+    }
+    
+    # ---------- nested cross-validation hyperparameters ----------
+    nested_cv_config = {
         'model_dim': 32,
         'num_heads': 8,
         'num_layers': 3,
         'd_ff': 256,
         'dropout': 0.12281570220908891,
-        'timestep': 256,
-        'num_classes': 2,
-        
         'batch_size': 32,
         'learning_rate': 0.0002912623775216651,
         'weight_decay': 0.00016228510005606125,
-        'num_epochs': 100,
-        'num_workers': 0,
-        
-        'save_metrics': True,
-        'create_plots': True,
     }
+    
+    # ---------- merge ----------
+    config = {**base_config, **(nested_cv_config if USE_NESTED_CV else initial_cv_config)}
+    config['hp_source'] = 'nested_cv' if USE_NESTED_CV else 'initial_cv'
+    
+    print(f"Using {'nested CV' if USE_NESTED_CV else 'initial CV'} hyperparameters")
     results = train_model(config)
     
     return results
