@@ -501,13 +501,6 @@ class MainModel(nn.Module):
         return logits_hc_vs_pd, logits_pd_vs_dd
 
     def get_attention_weights(self, left_wrist, right_wrist, device=None):
-        """Forward pass that returns per-layer attention weight dicts.
-        
-        Returns:
-            all_weights: list of dicts, one per layer, each containing
-                'cross_left_to_right', 'cross_right_to_left',
-                'self_left', 'self_right'  — each (batch, heads, seq, seq)
-        """
         self.eval()
         with torch.no_grad():
             left_encoded = self.left_projection(left_wrist)
@@ -704,63 +697,132 @@ def plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir="plots"):
     return features_2d
 
 
+def _get_attention_signal_scores(model, left_wrist, right_wrist, device):
+    """Return per-timestep attention importance (seq_len,) for a batch.
+
+    Averages the self-left attention matrix across all heads and all layers,
+    then takes the row-wise max to get one importance score per query position.
+    Shape returned: (batch, seq_len)
+    """
+    all_weights = model.get_attention_weights(left_wrist, right_wrist, device)
+    # Stack self_left from all layers: (num_layers, batch, heads, seq, seq)
+    stacked = np.stack(
+        [w['self_left'].mean(dim=1).cpu().numpy() for w in all_weights], axis=0
+    )  # (layers, batch, seq, seq)
+    # Average over layers, then take column-sum as key importance
+    avg = stacked.mean(axis=0)          # (batch, seq, seq)
+    importance = avg.mean(axis=1)       # (batch, seq) — mean over query dim
+    # Normalise per sample to [0, 1]
+    mn = importance.min(axis=1, keepdims=True)
+    mx = importance.max(axis=1, keepdims=True)
+    importance = (importance - mn) / (mx - mn + 1e-8)
+    return importance                   # (batch, seq)
+
+
 def plot_attention_weights(model, dataloader, device, output_dir="plots", num_samples=1):
-    """Extract and plot attention weight heatmaps for a few samples.
-    
-    Generates one figure per sample showing attention maps across all layers
-    with four attention types: Cross L→R, Cross R→L, Self-Left, Self-Right.
-    Weights are averaged over all heads for each attention type.
+    """Two comparison figures (HC vs PD, PD vs DD) styled like the reference image.
+
+    Each figure has two stacked panels. Each panel contains:
+      - The raw left-wrist signal (first channel, black waveform)
+      - Red-shaded vertical bands whose alpha is proportional to the
+        column-averaged attention score at that timestep.
+
+    Figures saved:
+      attention_comparison_hc_vs_pd.png
+      attention_comparison_pd_vs_dd.png
     """
     model.eval()
     os.makedirs(output_dir, exist_ok=True)
-    
-    samples_plotted = 0
+
+    # Collect one example per class from the dataloader
+    # hc_vs_pd labels: HC=0, PD=1  (label == -1 means not applicable)
+    # pd_vs_dd labels: PD=0, DD=1  (label == -1 means not applicable)
+    collected = {
+        'hc': None,   # (left, right, signal_np, label_str)
+        'pd_hc': None,
+        'pd_dd': None,
+        'dd': None,
+    }
+
     for batch in dataloader:
-        left_sample, right_sample = batch[0], batch[1]
-        left_sample = left_sample.to(device)
-        right_sample = right_sample.to(device)
-        
-        all_weights = model.get_attention_weights(left_sample, right_sample, device)
-        num_layers = len(all_weights)
-        
-        batch_size = left_sample.size(0)
-        for sample_idx in range(min(batch_size, num_samples - samples_plotted)):
-            attn_types = ['cross_left_to_right', 'cross_right_to_left', 'self_left', 'self_right']
-            attn_titles = ['Cross Left→Right', 'Cross Right→Left', 'Self-Attention Left', 'Self-Attention Right']
-            
-            fig, axes = plt.subplots(num_layers, 4, figsize=(20, 5 * num_layers))
-            if num_layers == 1:
-                axes = axes[np.newaxis, :]  # ensure 2D indexing
-            
-            fig.suptitle(f'Attention Weights — Sample {samples_plotted + 1}', fontsize=16, y=1.02)
-            
-            for layer_idx in range(num_layers):
-                for col_idx, (attn_key, attn_title) in enumerate(zip(attn_types, attn_titles)):
-                    w = all_weights[layer_idx][attn_key]  # (batch, heads, seq, seq)
-                    # Average over heads for this sample
-                    w_sample = w[sample_idx].mean(dim=0).cpu().numpy()  # (seq, seq)
-                    
-                    ax = axes[layer_idx, col_idx]
-                    im = ax.imshow(w_sample, aspect='auto', cmap='viridis')
-                    ax.set_title(f'Layer {layer_idx+1}: {attn_title}', fontsize=10)
-                    ax.set_xlabel('Key Position')
-                    ax.set_ylabel('Query Position')
-                    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            
-            plt.tight_layout()
-            save_path = os.path.join(output_dir, f'attention_weights_sample_{samples_plotted + 1}.png')
-            plt.savefig(save_path, dpi=200, bbox_inches='tight')
-            plt.close()
-            print(f"[saved] {save_path}")
-            
-            samples_plotted += 1
-            if samples_plotted >= num_samples:
-                break
-        
-        if samples_plotted >= num_samples:
+        left_b, right_b, hc_pd_b, pd_dd_b = batch
+        left_b = left_b.to(device)
+        right_b = right_b.to(device)
+
+        importance = _get_attention_signal_scores(model, left_b, right_b, device)
+
+        for i in range(len(left_b)):
+            hc_pd_lbl = hc_pd_b[i].item()
+            pd_dd_lbl = pd_dd_b[i].item()
+            sig = left_b[i, :, 0].cpu().numpy()    # first accelerometer channel
+            imp = importance[i]                     # (seq,)
+
+            if collected['hc'] is None and hc_pd_lbl == 0:
+                collected['hc'] = (sig, imp, 'HC')
+            if collected['pd_hc'] is None and hc_pd_lbl == 1:
+                collected['pd_hc'] = (sig, imp, 'PD')
+            if collected['pd_dd'] is None and pd_dd_lbl == 0:
+                collected['pd_dd'] = (sig, imp, 'PD')
+            if collected['dd'] is None and pd_dd_lbl == 1:
+                collected['dd'] = (sig, imp, 'DD')
+
+        if all(v is not None for v in collected.values()):
             break
-    
-    print(f"Plotted attention weights for {samples_plotted} sample(s)")
+
+    def _draw_comparison(pair_a, pair_b, title, save_name):
+        """Draw a two-panel waveform + attention plot like the reference image."""
+        if pair_a is None or pair_b is None:
+            print(f"[skip] Not enough samples for {save_name}")
+            return
+
+        fig, axes = plt.subplots(2, 1, figsize=(14, 6), sharex=True)
+        fig.suptitle(title, fontsize=13, fontweight='bold')
+
+        for ax, (sig, imp, label_str), panel_idx in zip(axes,
+                                                         [pair_a, pair_b],
+                                                         [0, 1]):
+            seq_len = len(sig)
+            time = np.arange(seq_len)
+
+            # Waveform
+            ax.plot(time, sig, color='black', linewidth=0.8, zorder=3)
+
+            # Shaded attention bands — one rectangle per timestep, alpha = importance
+            for t in range(seq_len):
+                alpha = float(imp[t]) * 0.75          # scale max alpha
+                if alpha > 0.02:                       # skip near-zero
+                    ax.axvspan(t - 0.5, t + 0.5,
+                               color='red', alpha=alpha, linewidth=0, zorder=2)
+
+            # Annotation box (top-right)
+            active = int(np.sum(imp > 0.5))
+            max_w  = float(imp.max())
+            ax.text(0.98, 0.95,
+                    f'Active: {active}/{seq_len} windows\nMax weight: {max_w:.3f}',
+                    transform=ax.transAxes, fontsize=7,
+                    verticalalignment='top', horizontalalignment='right',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.7))
+
+            ax.set_ylabel(f'Sample\n({label_str})', fontsize=9)
+            ax.grid(False)
+
+        axes[-1].set_xlabel('Time', fontsize=10)
+        plt.tight_layout()
+        save_path = os.path.join(output_dir, save_name)
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        plt.close()
+        print(f"[saved] {save_path}")
+
+    _draw_comparison(
+        collected['hc'], collected['pd_hc'],
+        'Attention Weight Comparison — HC vs PD',
+        'attention_comparison_hc_vs_pd.png'
+    )
+    _draw_comparison(
+        collected['pd_dd'], collected['dd'],
+        'Attention Weight Comparison — PD vs DD',
+        'attention_comparison_pd_vs_dd.png'
+    )
 
 
 ###################trainer################ 

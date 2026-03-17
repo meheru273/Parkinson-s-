@@ -82,7 +82,7 @@ Each participant wears a smartwatch on both wrists, providing six-axis IMU measu
 
 \subsection{Motor Tasks}
 Ten standardised motor tasks are recorded: \textit{CrossArms}, \textit{DrinkGlas}, \textit{Entrainment}, \textit{HoldWeight}, \textit{LiftHold}, \textit{PointFinger}, \textit{Relaxed}, \textit{StretchHold}, \textit{TouchIndex}, and \textit{TouchNose}. These tasks are designed to elicit different aspects of motor impairment associated with Parkinson's Disease.
-
+figure~\ref{fig:sensor_viz} visualises the raw sensor data from a representative patient performing the \textit{HoldWeight} task, showing distinct patterns in the accelerometer and gyroscope channels that may be indicative of motor symptoms such as tremor and bradykinesia.
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.45\textwidth]{image5.png}
@@ -122,6 +122,13 @@ A \textbf{patient-level stratified $5$-fold cross-validation} strategy is used. 
 
 % ─── IV. Methodology ──────────────────────────────────────────────
 \section{Methodology}
+
+to address the difficulty in parkinson's tremor and gait detection, we have established a two phase pipeline: (i)~a supervised learning phase using a dual-channel cross-attention Transformer architecture,
+and (ii)~a self-supervised contrastive pre-training phase to enhance feature learning from unlabelled data.
+% TODO: This section should describe the entire methodology as summary.
+% Given bilateral IMU recordings $\mathbf{X} \in \mathbb{R}^{C \times T}$,
+% where $C$ is the number of sensor channels and $T$ is the total length of the sequence.
+% Add problem statement and motivation for the model architecture and design choices.
 
 \subsection{Data Preprocessing}
 

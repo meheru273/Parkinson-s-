@@ -604,8 +604,9 @@ class TimesFMFeatureExtractor(nn.Module):
                 for layer_idx, layer in enumerate(model_to_modify.stacked_xf):
                     # Each layer is a Transformer object
                     for name, module in layer.named_modules():
-                        # Target attention projections and feed-forward layers
-                        if isinstance(module, nn.Linear) and any(x in name for x in ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'linear1', 'linear2']):
+                        # Target only Q and V projections (standard LoRA practice)
+                        # Applying to all 6 layers (Q/K/V/out/ff1/ff2) causes overfitting
+                        if isinstance(module, nn.Linear) and any(x in name for x in ['q_proj', 'v_proj']):
                              # Get parent
                              parts = name.split('.')
                              parent = layer
@@ -743,8 +744,7 @@ class TimesFMFeatureExtractor(nn.Module):
             right_flat = right_wrist.mean(dim=1)  # (batch, 6)
             combined = torch.cat([left_flat, right_flat], dim=-1)  # (batch, 12)
 
-            # Lazy-init emergency projection (WITH gradients)
-            # Output model_dim to match channel-pooled feature dimension
+    
             if self.emergency_projection is None:
                 self.emergency_projection = nn.Linear(12, self.model_dim).to(device)
                 print(f"⚠️ Using emergency projection: 12 → {self.model_dim}")
@@ -802,14 +802,11 @@ class TimesFMClassifier(nn.Module):
         )
         
         # Feature extractor now returns (B, model_dim) after channel mean-pooling
-        # Project: model_dim -> hidden_dim -> hidden_dim//2 with aggressive dropout
+        # Single-layer projection: 1280 -> 256 with moderate dropout
         self.feature_projection = nn.Sequential(
-            nn.Linear(model_dim, hidden_dim),            # 1280 -> 512
-            nn.LayerNorm(hidden_dim),
-            nn.GELU(),
-            nn.Dropout(0.5),
-            nn.Linear(hidden_dim, hidden_dim // 2),      # 512 -> 256
-            nn.LayerNorm(hidden_dim // 2),
+            nn.LayerNorm(model_dim),
+            nn.Dropout(0.3),
+            nn.Linear(model_dim, hidden_dim // 2),       # 1280 -> 256
             nn.GELU(),
             nn.Dropout(0.3),
         )
@@ -1050,46 +1047,25 @@ def plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir="plots"):
     return features_2d
 
 
-# ============================================================================
-# CHECKPOINT LOADING AND SAVING
-# ============================================================================
-
 def load_checkpoint(checkpoint_path, model, optimizer=None, device='cuda'):
-    """
-    Load checkpoint and return the state.
     
-    Args:
-        checkpoint_path: Path to checkpoint file
-        model: Model to load state into
-        optimizer: Optimizer to load state into (optional)
-        device: Device to load model to
-        
-    Returns:
-        Dictionary with checkpoint information
-    """
-    print(f"\n{'='*60}")
     print(f"Loading checkpoint from: {checkpoint_path}")
-    print(f"{'='*60}")
     
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
-    # Load checkpoint (weights_only=False needed for checkpoints with numpy objects)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
-    # Load model state
     model.load_state_dict(checkpoint['model_state_dict'],strict=False)
-    print("✓ Model state loaded")
     
     # Load optimizer state if provided
     if optimizer is not None and 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print("✓ Optimizer state loaded")
+      
     
     # Extract checkpoint info
     start_epoch = checkpoint.get('epoch', 0) + 1  # Start from next epoch
     fold = checkpoint.get('fold', 1)
-    val_acc_combined = checkpoint.get('val_acc_combined', 0)
     val_acc_hc = checkpoint.get('val_acc_hc', 0)
     val_acc_pd = checkpoint.get('val_acc_pd', 0)
     
@@ -1097,7 +1073,6 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device='cuda'):
     print(f"  Fold: {fold}")
     print(f"  Last completed epoch: {start_epoch - 1}")
     print(f"  Will resume from epoch: {start_epoch}")
-    print(f"  Best val accuracy - Combined: {val_acc_combined:.4f}")
     print(f"  Best val accuracy - HC vs PD: {val_acc_hc:.4f}")
     print(f"  Best val accuracy - PD vs DD: {val_acc_pd:.4f}")
     
@@ -1130,8 +1105,8 @@ def save_checkpoint(model, optimizer, fold, epoch, val_acc_combined, val_acc_hc,
 # TRAINING FUNCTIONS
 # ============================================================================
 
-def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device, scheduler=None):
-    """Train for one epoch."""
+def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device, scheduler=None, mixup_alpha=0.0):
+    """Train for one epoch with optional Mixup regularization."""
     model.train()
     train_loss = 0.0
     hc_pd_train_pred, hc_pd_train_labels = [], []
@@ -1146,18 +1121,42 @@ def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer,
         hc_pd = hc_pd.to(device)
         pd_dd = pd_dd.to(device)
         
+        # ---- Mixup regularization ----
+        use_mixup = mixup_alpha > 0 and left_sample.size(0) > 1
+        if use_mixup:
+            lam = np.random.beta(mixup_alpha, mixup_alpha)
+            lam = max(lam, 1 - lam)  # ensure lam >= 0.5 so original sample dominates
+            mix_idx = torch.randperm(left_sample.size(0), device=device)
+            left_sample = lam * left_sample + (1 - lam) * left_sample[mix_idx]
+            right_sample = lam * right_sample + (1 - lam) * right_sample[mix_idx]
+            hc_pd_mixed = hc_pd[mix_idx]
+            pd_dd_mixed = pd_dd[mix_idx]
+        
         optimizer.zero_grad()
         hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device)
         
         total_loss = 0
         loss_count = 0
         
-        # HC vs PD loss
+        # HC vs PD loss (with Mixup soft labels if enabled)
         valid_hc_pd_mask = (hc_pd != -1)
         if valid_hc_pd_mask.any():
             valid_logits_hc = hc_pd_logits[valid_hc_pd_mask]
             valid_labels_hc = hc_pd[valid_hc_pd_mask]
-            loss_hc = criterion_hc(valid_logits_hc, valid_labels_hc)
+            
+            if use_mixup:
+                # Both original AND shuffled labels must be valid (not -1)
+                both_valid_hc = valid_hc_pd_mask & (hc_pd_mixed != -1)
+                if both_valid_hc.any():
+                    mix_logits_hc = hc_pd_logits[both_valid_hc]
+                    mix_labels_orig = hc_pd[both_valid_hc]
+                    mix_labels_shuf = hc_pd_mixed[both_valid_hc]
+                    loss_hc = lam * criterion_hc(mix_logits_hc, mix_labels_orig) + \
+                              (1 - lam) * criterion_hc(mix_logits_hc, mix_labels_shuf)
+                else:
+                    loss_hc = criterion_hc(valid_logits_hc, valid_labels_hc)
+            else:
+                loss_hc = criterion_hc(valid_logits_hc, valid_labels_hc)
             total_loss += loss_hc
             loss_count += 1
             
@@ -1165,12 +1164,24 @@ def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer,
             hc_pd_train_pred.extend(preds_hc.cpu().numpy())
             hc_pd_train_labels.extend(valid_labels_hc.cpu().numpy())
         
-        # PD vs DD loss
+        # PD vs DD loss (with Mixup soft labels if enabled)
         valid_pd_dd_mask = (pd_dd != -1)
         if valid_pd_dd_mask.any():
             valid_logits_pd = pd_dd_logits[valid_pd_dd_mask]
             valid_labels_pd = pd_dd[valid_pd_dd_mask]
-            loss_pd = criterion_pd(valid_logits_pd, valid_labels_pd)
+            
+            if use_mixup:
+                both_valid_pd = valid_pd_dd_mask & (pd_dd_mixed != -1)
+                if both_valid_pd.any():
+                    mix_logits_pd = pd_dd_logits[both_valid_pd]
+                    mix_labels_pd_orig = pd_dd[both_valid_pd]
+                    mix_labels_pd_shuf = pd_dd_mixed[both_valid_pd]
+                    loss_pd = lam * criterion_pd(mix_logits_pd, mix_labels_pd_orig) + \
+                              (1 - lam) * criterion_pd(mix_logits_pd, mix_labels_pd_shuf)
+                else:
+                    loss_pd = criterion_pd(valid_logits_pd, valid_labels_pd)
+            else:
+                loss_pd = criterion_pd(valid_logits_pd, valid_labels_pd)
             total_loss += loss_pd
             loss_count += 1
             
@@ -1308,20 +1319,6 @@ def extract_features(model, dataloader, device):
 # ============================================================================
 
 def unfreeze_top_layers(model: nn.Module, n_layers: int) -> int:
-    """
-    Unfreeze only the last `n_layers` of TimesFM's stacked_xf transformer stack.
-
-    Everything else (embedding layers, lower transformer blocks, etc.) stays frozen,
-    so the backbone still acts as a strong regulariser while the top layers can
-    adapt to the new task.
-
-    Args:
-        model: The TimesFMClassifier instance.
-        n_layers: How many layers from the top of stacked_xf to unfreeze.
-
-    Returns:
-        Number of parameters unfrozen.
-    """
     try:
         stacked_xf = model.feature_extractor.timesfm_module.model.stacked_xf
     except AttributeError:
@@ -1381,24 +1378,11 @@ def _build_optimizer_with_discriminative_lr(model: nn.Module, config: dict) -> o
 # ============================================================================
 
 def train_timesfm_model(config, resume_from_checkpoint=None):
-    """
-    Train TimesFM-based model for Parkinson's disease detection.
-    NOW SUPPORTS CHECKPOINT RESUMPTION AND SAVES METRICS AFTER EACH EPOCH.
     
-    Args:
-        config: Configuration dictionary
-        resume_from_checkpoint: Path to checkpoint to resume from (optional)
-    
-    Returns:
-        List of fold results
-    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     ablation_type = config.get('ablation_type', 'mlp_finetune')
-    print(f"\n{'='*60}")
-    print(f"ABLATION STUDY: TimesFM with {ablation_type.upper()}")
-    print(f"{'='*60}")
     
     # Create output directories
     output_base = config.get('output_dir', f'results/timesfm_{ablation_type}')
@@ -1493,7 +1477,7 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
                 model_dim=config.get('model_dim', 1280),
                 hidden_dim=config.get('hidden_dim', 512),
                 dropout=config.get('dropout', 0.1),
-                freeze_backbone=True,   # Start fully frozen
+                freeze_backbone=True,   
                 use_lora=False,
             ).to(device)
             
@@ -1516,28 +1500,16 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
         else:
             raise ValueError(f"Unknown ablation_type: {ablation_type}. Valid options: 'gradual_unfreeze', 'lora'")
         
-        # Print parameter counts
-        total_params = count_parameters(model)
-        trainable_params = count_parameters(model, trainable_only=True)
-        print(f"\nModel Parameters:")
-        print(f"  Total: {total_params:,}")
-        print(f"  Trainable: {trainable_params:,} ({100*trainable_params/total_params:.2f}%)")
-        
         print("  Running warmup forward pass to initialize all layers...")
         with torch.no_grad():
             dummy_left = torch.randn(1, 256, 6).to(device)
             dummy_right = torch.randn(1, 256, 6).to(device)
             _ = model(dummy_left, dummy_right, device)
         
-        # Re-count after lazy init
         total_params = count_parameters(model)
         trainable_params = count_parameters(model, trainable_only=True)
         print(f"  After init - Total: {total_params:,}, Trainable: {trainable_params:,}")
         
-        # Optimizer — discriminative LRs are always used for gradual_unfreeze.
-        # At epoch 0 the backbone is fully frozen so backbone_params will be empty
-        # (no grad), and only the head params actually enter the optimiser.
-        # When unfreezing kicks in we rebuild the optimiser (see epoch loop).
         if ablation_type == 'gradual_unfreeze':
             print(f"  Using DISCRIMINATIVE Learning Rates: Backbone={config.get('backbone_lr', 2e-5)}, "
                   f"Heads={config.get('head_lr', 1e-3)}")
@@ -1552,12 +1524,10 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
                 weight_decay=config.get('weight_decay', 1e-4)
             )
         
-        # Scheduler - Use OneCycleLR if warmup is requested (better for fine-tuning)
         num_epochs = config.get('num_epochs', 50)
         warmup_epochs = config.get('warmup_epochs', 0)
         
         if warmup_epochs > 0:
-            print(f"  Using OneCycleLR scheduler with {warmup_epochs} warmup epochs")
             steps_per_epoch = len(train_loader)
             scheduler = optim.lr_scheduler.OneCycleLR(
                 optimizer,
@@ -1631,11 +1601,8 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
                     print(f"\n▶ Epoch {epoch + 1}: Triggering gradual unfreeze "
                           f"(top {n_unfreeze} layers of stacked_xf)")
                     unfreeze_top_layers(model, n_unfreeze)
-                    # CRITICAL: Update freeze flag so forward pass enables gradients
                     model.feature_extractor.set_freeze_state(False)
-                    # Rebuild optimiser so unfrozen params are included
                     optimizer = _build_optimizer_with_discriminative_lr(model, config)
-                    # Rebuild scheduler for the remaining epochs
                     remaining_epochs = num_epochs - epoch
                     warmup_epochs = config.get('warmup_epochs', 0)
                     if warmup_epochs > 0:
@@ -1653,17 +1620,12 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
                         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                             optimizer, mode='min', factor=0.5, patience=5
                         )
-                    # Log updated parameter counts
-                    total_params = count_parameters(model)
-                    trainable_params = count_parameters(model, trainable_only=True)
-                    print(f"  Updated — Total: {total_params:,}, "
-                          f"Trainable: {trainable_params:,} "
-                          f"({100*trainable_params/total_params:.2f}%)")
-            # ───────────────────────────────────────────────────────────────
             
-            # Training
+            # Training (with Mixup if configured)
+            mixup_alpha = config.get('mixup_alpha', 0.0)
             train_loss, train_metrics_hc, train_metrics_pd = train_single_epoch(
-                model, train_loader, criterion_hc, criterion_pd, optimizer, device, scheduler
+                model, train_loader, criterion_hc, criterion_pd, optimizer, device, scheduler,
+                mixup_alpha=mixup_alpha
             )
             
             # Validation
@@ -1703,7 +1665,6 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
                     'metrics': val_metrics_pd
                 })
             
-            # *** CRITICAL FIX: Save metrics after EACH epoch ***
             if config.get('save_metrics', True):
                 save_epoch_metrics(
                     epoch + 1, fold_idx, fold_metrics_hc, fold_metrics_pd,
@@ -1769,7 +1730,6 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
                       f"Best epoch was {best_epoch} with val_acc={best_val_acc:.4f}")
                 break
         
-        # Extract features for visualization
         fold_features, fold_hc_pd_labels, fold_pd_dd_labels = extract_features(
             model, val_loader, device
         )
@@ -1840,10 +1800,12 @@ def main():
         'dropout': 0.3,
         'label_smoothing': 0.1,
         
-        # LoRA settings (for lora ablation)
-        'lora_r': 8,
-        'lora_alpha': 16,
-        'lora_dropout': 0.15,
+        'lora_r': 6,          
+        'lora_alpha': 12,      
+        'lora_dropout': 0.15,  
+        
+        # Mixup regularization
+        'mixup_alpha': 0.1,   
         
         # Training settings
         'num_folds': 5,
@@ -1852,7 +1814,7 @@ def main():
         'learning_rate': 1e-4,
         'weight_decay': 1e-2,
         'num_epochs': 40,
-        'early_stop_patience': 10,
+        'early_stop_patience': 10,  
         'num_workers': 0,
         
         # Output settings
@@ -1873,7 +1835,7 @@ def main():
         base_config['unfreeze_after_epoch'] = 10  
         base_config['unfreeze_n_layers'] = 2   
     elif ablation_type == 'lora':
-        base_config['learning_rate'] = 2e-4   
+        base_config['learning_rate'] = 1e-4   
         base_config['num_epochs'] = 40
         base_config['warmup_epochs'] = 3
     
@@ -1881,11 +1843,9 @@ def main():
     config['ablation_type'] = ablation_type
     config['output_dir'] = f'results/timesfm_{ablation_type}'
     
-    resume_from = "/kaggle/input/models/meherujannat/loratimesfm/tensorflow2/default/1/best_model_fold_1.pth"
+    resume_from = None
     
-    print("\n" + "="*70)
-    print("TimesFM ABLATION STUDY FOR PARKINSON'S DISEASE DETECTION")
-    print("="*70)
+   
     print(f"\nAblation Type: {ablation_type}")
     print(f"Epochs: {config['num_epochs']}")
     print(f"Folds: {config['max_folds_to_train']}/{config['num_folds']}")

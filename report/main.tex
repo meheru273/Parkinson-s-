@@ -123,6 +123,13 @@ A \textbf{patient-level stratified $5$-fold cross-validation} strategy is used. 
 % ─── IV. Methodology ──────────────────────────────────────────────
 \section{Methodology}
 
+to address the difficulty in parkinson's tremor and gait detection, we have established a two phase pipeline: (i)~a supervised learning phase using a dual-channel cross-attention Transformer architecture,
+and (ii)~a self-supervised contrastive pre-training phase to enhance feature learning from unlabelled data.
+% TODO: This section should describe the entire methodology as summary.
+% Given bilateral IMU recordings $\mathbf{X} \in \mathbb{R}^{C \times T}$,
+% where $C$ is the number of sensor channels and $T$ is the total length of the sequence.
+% Add problem statement and motivation for the model architecture and design choices.
+
 \subsection{Data Preprocessing}
 
 \subsubsection{Downsampling}

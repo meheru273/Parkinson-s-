@@ -2096,14 +2096,6 @@ def finetune_with_kfold(pretrained_encoder, config):
 # ============================================================================
 
 def plot_label_efficiency(results, output_path):
-    """
-    Plot accuracy vs percentage of labeled data.
-    
-    Args:
-        results: list of dicts with keys 'fraction', 'pct', 'best_val_acc_hc', 
-                 'best_val_acc_pd', 'best_val_acc_combined'
-        output_path: path to save the plot
-    """
     pcts = [r['pct'] for r in results]
     acc_hc = [r['best_val_acc_hc'] for r in results]
     acc_pd = [r['best_val_acc_pd'] for r in results]
@@ -2115,11 +2107,16 @@ def plot_label_efficiency(results, output_path):
     ax.plot(pcts, acc_pd, 's-', color='#FF5722', linewidth=2, markersize=8, label='PD vs DD')
     ax.plot(pcts, acc_combined, 'D-', color='#4CAF50', linewidth=2.5, markersize=9, label='Combined (Avg)')
     
+    # Shade the 0% point distinctly to highlight it is pure SSL (no labels used)
+    if pcts and pcts[0] == 0:
+        ax.axvline(x=0, color='gray', linestyle='--', linewidth=1.2, alpha=0.6, label='SSL baseline (0% labels)')
+        ax.scatter([0], [acc_combined[0]], color='gold', s=120, zorder=5, edgecolors='black', linewidth=1.2)
+    
     ax.set_xlabel('Percentage of Labeled Training Data (%)', fontsize=13)
     ax.set_ylabel('Best Validation Accuracy', fontsize=13)
-    ax.set_title('Label Efficiency Experiment', fontsize=15, fontweight='bold')
+    ax.set_title('Label Efficiency Experiment\n(0% = Pure SSL encoder, no fine-tuning)', fontsize=14, fontweight='bold')
     ax.set_xticks(pcts)
-    ax.set_xticklabels([f'{p}%' for p in pcts])
+    ax.set_xticklabels([f'{p}%' if p > 0 else '0%\n(SSL)' for p in pcts])
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
     ax.set_ylim([0, 1.05])
@@ -2136,17 +2133,6 @@ def plot_label_efficiency(results, output_path):
 
 
 def label_efficiency_experiment(pretrained_encoder, config):
-    """
-    Label Efficiency Experiment.
-    
-    Trains the finetuning classifier on increasing fractions of the labeled
-    training data: 20% -> 50% -> 70% -> 100%.  At each step, new samples are
-    drawn from a remaining pool so that NO sample is repeated across increments.
-    The validation set stays fixed (determined by K-Fold).
-    
-    A fresh model (with weights transferred from the pre-trained encoder) is
-    created for EACH fraction to ensure a fair comparison.
-    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     os.makedirs('metrics', exist_ok=True)
@@ -2262,7 +2248,7 @@ def label_efficiency_experiment(pretrained_encoder, config):
     for frac in fractions:
         n_subset = int(np.ceil(frac * n_train))
         n_subset = min(n_subset, n_train)  # cap at total
-        subset_indices = permuted_indices[:n_subset]
+        subset_indices = permuted_indices[:n_subset] if n_subset > 0 else np.array([], dtype=int)
         
         pct = int(round(frac * 100))
         
@@ -2272,6 +2258,94 @@ def label_efficiency_experiment(pretrained_encoder, config):
             print(f"Skipping {pct}% — already completed in a previous run")
             print(f"{'='*60}")
             continue
+        
+        hc_pd_loss = nn.CrossEntropyLoss()
+        pd_dd_loss  = nn.CrossEntropyLoss()
+        
+        # ---------------------------------------------------------------
+        # SPECIAL CASE: 0% labels — pure SSL encoder, no fine-tuning.
+        # We transfer the pretrained weights, freeze everything, and run
+        # a single validation pass to measure SSL generalisation.
+        # ---------------------------------------------------------------
+        if frac == 0.0:
+            print(f"\n{'='*60}")
+            print(f"0% Labels — Evaluating pure SSL encoder (no fine-tuning)")
+            print(f"{'='*60}")
+            
+            model = MainModel(
+                input_dim=config['input_dim'],
+                model_dim=config['model_dim'],
+                num_heads=config['num_heads'],
+                num_layers=config['num_layers'],
+                d_ff=config['d_ff'],
+                dropout=config['dropout'],
+                timestep=config['timestep'],
+                num_classes=config['num_classes']
+            ).to(device)
+            model = transfer_weights_to_classifier(pretrained_encoder, model)
+            
+            # Freeze all parameters — no training at all
+            for param in model.parameters():
+                param.requires_grad = False
+            
+            val_results = validate_single_epoch(
+                model, val_loader, hc_pd_loss, pd_dd_loss, device
+            )
+            val_loss, hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs, \
+            pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = val_results
+            
+            val_metrics_hc = calculate_metrics(
+                hc_pd_val_labels, hc_pd_val_pred,
+                "0% SSL-only HC vs PD", verbose=True
+            )
+            val_metrics_pd = calculate_metrics(
+                pd_dd_val_labels, pd_dd_val_pred,
+                "0% SSL-only PD vs DD", verbose=True
+            )
+            
+            best_val_acc_hc  = val_metrics_hc.get('accuracy', 0)
+            best_val_acc_pd  = val_metrics_pd.get('accuracy', 0)
+            best_val_acc     = (best_val_acc_hc + best_val_acc_pd) / 2
+            best_epoch       = 0
+            best_val_cse     = val_loss
+            best_metrics_hc  = val_metrics_hc
+            best_metrics_pd  = val_metrics_pd
+            
+            print(f"\n[SSL-only] HC vs PD Acc: {best_val_acc_hc:.4f} | "
+                  f"PD vs DD Acc: {best_val_acc_pd:.4f} | Combined: {best_val_acc:.4f}")
+            
+            result = {
+                'fraction': frac,
+                'pct': pct,
+                'n_samples': 0,
+                'best_val_acc_hc': best_val_acc_hc,
+                'best_val_acc_pd': best_val_acc_pd,
+                'best_val_acc_combined': best_val_acc,
+                'precision_hc': best_metrics_hc.get('precision_avg', 0),
+                'recall_hc':    best_metrics_hc.get('recall_avg', 0),
+                'f1_hc':        best_metrics_hc.get('f1_avg', 0),
+                'precision_pd': best_metrics_pd.get('precision_avg', 0),
+                'recall_pd':    best_metrics_pd.get('recall_avg', 0),
+                'f1_pd':        best_metrics_pd.get('f1_avg', 0),
+                'val_cse':      best_val_cse,
+                'best_epoch': 0
+            }
+            all_fraction_results.append(result)
+            
+            completed_fractions.add(pct)
+            with open(permutation_path, 'r') as f:
+                perm_data = json.load(f)
+            perm_data['completed_fractions'] = sorted(list(completed_fractions))
+            perm_data['completed_results'] = all_fraction_results
+            with open(permutation_path, 'w') as f:
+                json.dump(perm_data, f, indent=2)
+            
+            print(f"  Progress saved to {permutation_path}")
+            continue  # skip the fine-tuning loop below
+        
+        # ---------------------------------------------------------------
+        # Non-zero fraction: standard fine-tuning
+        # ---------------------------------------------------------------
         
         # Create subset dataset
         subset_dataset = ParkinsonsDataLoader(
@@ -2327,16 +2401,16 @@ def label_efficiency_experiment(pretrained_encoder, config):
             optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
         
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-        hc_pd_loss = nn.CrossEntropyLoss()
-        pd_dd_loss = nn.CrossEntropyLoss()
         
         best_val_acc = 0.0
         best_val_acc_hc = 0.0
         best_val_acc_pd = 0.0
         best_epoch = 0
+        best_val_cse = float('inf')
+        best_metrics_hc = {}
+        best_metrics_pd = {}
         patience_counter = 0
         patience = config.get('early_stopping_patience', 15)
-        best_val_loss = float('inf')
         
         for epoch in range(config['num_epochs']):
             train_loss, train_metrics_hc, train_metrics_pd = train_single_epoch(
@@ -2374,6 +2448,9 @@ def label_efficiency_experiment(pretrained_encoder, config):
                 best_val_acc_hc = val_acc_hc
                 best_val_acc_pd = val_acc_pd
                 best_epoch = epoch + 1
+                best_val_cse = val_loss
+                best_metrics_hc = val_metrics_hc
+                best_metrics_pd = val_metrics_pd
                 patience_counter = 0
                 
                 # Save model checkpoint with config
@@ -2408,6 +2485,13 @@ def label_efficiency_experiment(pretrained_encoder, config):
             'best_val_acc_hc': best_val_acc_hc,
             'best_val_acc_pd': best_val_acc_pd,
             'best_val_acc_combined': best_val_acc,
+            'precision_hc': best_metrics_hc.get('precision_avg', 0),
+            'recall_hc':    best_metrics_hc.get('recall_avg', 0),
+            'f1_hc':        best_metrics_hc.get('f1_avg', 0),
+            'precision_pd': best_metrics_pd.get('precision_avg', 0),
+            'recall_pd':    best_metrics_pd.get('recall_avg', 0),
+            'f1_pd':        best_metrics_pd.get('f1_avg', 0),
+            'val_cse':      best_val_cse,
             'best_epoch': best_epoch
         }
         all_fraction_results.append(result)
@@ -2440,10 +2524,16 @@ def label_efficiency_experiment(pretrained_encoder, config):
     # Save results to CSV
     csv_path = 'metrics/label_efficiency_results.csv'
     with open(csv_path, 'w') as f:
-        f.write('pct_labels,n_samples,acc_hc_vs_pd,acc_pd_vs_dd,acc_combined,best_epoch\n')
+        f.write('pct_labels,n_samples,acc_hc_vs_pd,acc_pd_vs_dd,acc_combined,'
+                'precision_hc,recall_hc,f1_hc,precision_pd,recall_pd,f1_pd,val_cse,best_epoch\n')
         for r in all_fraction_results:
-            f.write(f"{r['pct']},{r['n_samples']},{r['best_val_acc_hc']:.4f},"
-                    f"{r['best_val_acc_pd']:.4f},{r['best_val_acc_combined']:.4f},{r['best_epoch']}\n")
+            f.write(
+                f"{r['pct']},{r['n_samples']},"
+                f"{r['best_val_acc_hc']:.4f},{r['best_val_acc_pd']:.4f},{r['best_val_acc_combined']:.4f},"
+                f"{r.get('precision_hc', 0):.4f},{r.get('recall_hc', 0):.4f},{r.get('f1_hc', 0):.4f},"
+                f"{r.get('precision_pd', 0):.4f},{r.get('recall_pd', 0):.4f},{r.get('f1_pd', 0):.4f},"
+                f"{r.get('val_cse', 0):.4f},{r['best_epoch']}\n"
+            )
     print(f"\n\u2713 Saved results to {csv_path}")
     
     # Plot accuracy vs label percentage
