@@ -18,7 +18,8 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Dict, List, Tuple
 import warnings
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, resample_poly
+from math import gcd
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 import os
@@ -40,10 +41,10 @@ def create_windows(data, window_size=256, overlap=0):
 
 
 def downsample(data, original_freq=100, target_freq=64):
-    step = int(original_freq // target_freq)
-    if step > 1:
-        return data[::step, :]
-    return data
+    g = gcd(original_freq, target_freq)
+    up = target_freq // g
+    down = original_freq // g
+    return resample_poly(data, up, down, axis=0)
 
 
 def bandpass_filter(signal, original_freq=64, upper_bound=20, lower_bound=0.1):
@@ -643,14 +644,14 @@ def train_task_model(config, task_name, model_type='cnn'):
                 }
                 
                 # Save best model
-                os.makedirs(f"models/{model_type}", exist_ok=True)
+                os.makedirs(f"checkpoints/{model_type}", exist_ok=True)
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'task': task_name,
                     'fold': fold_idx,
                     'best_acc': best_val_acc,
                     'config': config
-                }, f"models/{model_type}/{task_name}_fold{fold_idx+1}.pth")
+                }, f"checkpoints/{model_type}/{task_name}_fold{fold_idx+1}.pth")
         
         fold_result = {
             'fold': fold_idx + 1,
@@ -676,6 +677,14 @@ def run_ablation_study(config):
     model_types = config.get('model_types', ['cnn', 'lstm'])
     
     all_results = {}
+    
+    # Save config.json once before running
+    os.makedirs("checkpoints", exist_ok=True)
+    config_serializable = {k: v for k, v in config.items()
+                           if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+    with open('checkpoints/config.json', 'w') as f:
+        json.dump(config_serializable, f, indent=2)
+    print("✓ Config saved: checkpoints/config.json")
     
     for model_type in model_types:
         all_results[model_type] = {}
@@ -797,7 +806,7 @@ def main():
     config = {
         # Data settings
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True,
+        'apply_downsampling': True,  # Set to False to skip downsampling (100 Hz → 64 Hz)
         'apply_bandpass_filter': True,
         'window_size': 256,
         'input_channels': 12,  # 6 channels × 2 wrists

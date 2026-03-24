@@ -6,7 +6,8 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Dict, List, Tuple
 import warnings
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, resample_poly
+from math import gcd
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from sklearn.model_selection import StratifiedKFold
@@ -48,10 +49,10 @@ def create_windows(data, window_size=256, overlap=0):
 
 #down sampling 
 def downsample(data, original_freq=100, target_freq=64):
-    step = int(original_freq // target_freq)  
-    if step > 1:
-        return data[::step, :]
-    return data
+    g = gcd(original_freq, target_freq)
+    up = target_freq // g
+    down = original_freq // g
+    return resample_poly(data, up, down, axis=0)
 
 
 # band pass filter
@@ -344,8 +345,7 @@ def _style_white_ax(ax):
     ax.tick_params(colors='#333333', labelsize=9)
     ax.xaxis.label.set_color('#333333')
     ax.yaxis.label.set_color('#333333')
-
-
+    
 def _load_raw_signal(data_root: str, patient_id: int, task: str = 'Relaxed'):
     """Load raw LeftWrist signal (no downsampling, no filter) for a given patient & task."""
     tmpl = pathlib.Path(data_root) / 'movement' / 'timeseries' / '{N:03d}_{X}_{Y}.txt'
@@ -763,4 +763,4 @@ if __name__ == '__main__':
         save_path=os.path.join(OUT_DIR, 'eda_bandpass_comparison.png')
     )
 
-    print("\n✓ All EDA plots saved.")
+    print("\n✓ All EDA plots saved.")

@@ -4,12 +4,14 @@
 import pathlib
 import numpy as np
 import json
+import copy
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Dict, List, Tuple
 import warnings
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, resample_poly
+from math import gcd
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from sklearn.model_selection import StratifiedKFold
@@ -56,10 +58,10 @@ def create_windows(data, window_size=256, overlap=0):
 
 #down sampling 
 def downsample(data, original_freq=100, target_freq=64):
-    step = int(original_freq // target_freq)  
-    if step > 1:
-        return data[::step, :]
-    return data
+    g = gcd(original_freq, target_freq)
+    up = target_freq // g
+    down = original_freq // g
+    return resample_poly(data, up, down, axis=0)
 
 
 # band pass filter
@@ -560,34 +562,78 @@ def calculate_metrics(y_true, y_pred, task_name="", verbose=True):
     
     return metrics
 
-def save_fold_metric(fold_idx, fold_suffix, best_epoch, best_val_acc,
-                     fold_metrics_hc, fold_metrics_pd):
-
+def save_fold_metric(fold_idx, fold_suffix,
+                     fold_metrics_hc, fold_metrics_pd,
+                     train_metrics_history_hc, train_metrics_history_pd,
+                     train_losses, val_losses):
+    """Save comprehensive per-classifier metrics for each epoch.
+    
+    For EACH classifier (hc_vs_pd and pd_vs_dd), saves:
+      - Train & val/test: accuracy, per-class precision/recall/F1/support
+      - Weighted-average precision/recall/F1
+      - Confusion matrix (flattened)
+      - Train loss, val/test loss
+    """
     os.makedirs("metrics", exist_ok=True)
 
-    # helper writer
-    def write_csv(filename, metrics_list):
+    def write_csv(filename, val_metrics_list, train_metrics_list, t_losses, v_losses):
         with open(filename, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["epoch", "accuracy", "precision", "recall", "f1"])
-            for epoch_data in metrics_list:
+            writer.writerow([
+                "epoch", "train_loss", "val_loss",
+                # Train metrics
+                "train_accuracy",
+                "train_precision_avg", "train_recall_avg", "train_f1_avg",
+                "train_precision_per_class", "train_recall_per_class",
+                "train_f1_per_class", "train_support_per_class",
+                "train_confusion_matrix",
+                # Val/test metrics
+                "val_accuracy",
+                "val_precision_avg", "val_recall_avg", "val_f1_avg",
+                "val_precision_per_class", "val_recall_per_class",
+                "val_f1_per_class", "val_support_per_class",
+                "val_confusion_matrix",
+            ])
+            n_epochs = max(len(val_metrics_list), len(train_metrics_list))
+            for i in range(n_epochs):
+                epoch_num = i + 1
+                tl = t_losses[i] if i < len(t_losses) else ''
+                vl = v_losses[i] if i < len(v_losses) else ''
+
+                # Train metrics for this epoch
+                tm = train_metrics_list[i] if i < len(train_metrics_list) else {}
+                # Val metrics for this epoch
+                vm = val_metrics_list[i]['metrics'] if i < len(val_metrics_list) else {}
+
+                def fmt_arr(arr):
+                    if arr is None: return ''
+                    return '|'.join(f'{x:.6f}' if isinstance(x, float) else str(x) for x in np.asarray(arr).flatten())
+
                 writer.writerow([
-                    epoch_data['epoch'],
-                    epoch_data['metrics'].get('accuracy', 0),
-                    epoch_data['metrics'].get('precision_avg', 0),  
-                    epoch_data['metrics'].get('recall_avg', 0), 
-                    epoch_data['metrics'].get('f1_avg', 0)  
+                    epoch_num, tl, vl,
+                    # Train
+                    tm.get('accuracy', ''),
+                    tm.get('precision_avg', ''), tm.get('recall_avg', ''), tm.get('f1_avg', ''),
+                    fmt_arr(tm.get('precision_per_class')), fmt_arr(tm.get('recall_per_class')),
+                    fmt_arr(tm.get('f1_per_class')), fmt_arr(tm.get('support_per_class')),
+                    fmt_arr(tm.get('confusion_matrix')),
+                    # Val
+                    vm.get('accuracy', ''),
+                    vm.get('precision_avg', ''), vm.get('recall_avg', ''), vm.get('f1_avg', ''),
+                    fmt_arr(vm.get('precision_per_class')), fmt_arr(vm.get('recall_per_class')),
+                    fmt_arr(vm.get('f1_per_class')), fmt_arr(vm.get('support_per_class')),
+                    fmt_arr(vm.get('confusion_matrix')),
                 ])
 
     # HC vs PD
-    if fold_metrics_hc:
+    if fold_metrics_hc or train_metrics_history_hc:
         hc_filename = f"metrics/hc_vs_pd_metrics{fold_suffix}.csv"
-        write_csv(hc_filename, fold_metrics_hc)
+        write_csv(hc_filename, fold_metrics_hc, train_metrics_history_hc, train_losses, val_losses)
 
     # PD vs DD
-    if fold_metrics_pd:
+    if fold_metrics_pd or train_metrics_history_pd:
         pd_filename = f"metrics/pd_vs_dd_metrics{fold_suffix}.csv"
-        write_csv(pd_filename, fold_metrics_pd)
+        write_csv(pd_filename, fold_metrics_pd, train_metrics_history_pd, train_losses, val_losses)
 
 
 
@@ -687,60 +733,6 @@ def plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir="plots"):
 
     return features_2d
 
-def save_best_epoch_results(fold_idx, best_epoch, 
-                           hc_metrics, pd_metrics,
-                           hc_cm, pd_cm,
-                           output_dir="results"):
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create filename
-    if fold_idx is not None:
-        filename = f"{output_dir}/fold_{fold_idx + 1}_best_results.txt"
-    else:
-        filename = f"{output_dir}/best_results.txt"
-    
-    with open(filename, 'w') as f:
-        # Write header
-        if fold_idx is not None:
-            f.write(f"Fold {fold_idx + 1} :\n\n")
-        else:
-            f.write("Best Results :\n\n")
-        
-        f.write(f"{'':15} | {'Best Epoch':^12} | {'accuracy':^10} | {'precision':^10} | {'recall':^10} | {'f1':^10} |\n")
-        
-        # HC vs PD row
-        f.write(f"{'Hc VS pd':15} | {best_epoch:^12} | "
-                f"{hc_metrics.get('accuracy', 0):^10.4f} | "
-                f"{hc_metrics.get('precision_avg', 0):^10.4f} | "
-                f"{hc_metrics.get('recall_avg', 0):^10.4f} | "
-                f"{hc_metrics.get('f1_avg', 0):^10.4f} |\n")
-        
-        # PD vs DD row
-        f.write(f"{'Pd VS dd':15} | {best_epoch:^12} | "
-                f"{pd_metrics.get('accuracy', 0):^10.4f} | "
-                f"{pd_metrics.get('precision_avg', 0):^10.4f} | "
-                f"{pd_metrics.get('recall_avg', 0):^10.4f} | "
-                f"{pd_metrics.get('f1_avg', 0):^10.4f} |\n")
-        
-        f.write("=" * 80 + "\n\n")
-        
-        # HC vs PD Confusion Matrix
-        f.write("HC vs PD Confusion Matrix:\n")
-        f.write("-" * 50 + "\n")
-        f.write(f"{'Confusion metric':20} | {'positive':^12} | {'negative':^12} |\n")
-        f.write("-" * 50 + "\n")
-        f.write(f"{'True':20} | {hc_cm[1][1]:^12} | {hc_cm[0][1]:^12} |\n")
-        f.write(f"{'false':20} | {hc_cm[1][0]:^12} | {hc_cm[0][0]:^12} |\n")
-        f.write("-" * 50 + "\n\n")
-        
-        # PD vs DD Confusion Matrix
-        f.write("PD vs DD Confusion Matrix:\n")
-        f.write("-" * 50 + "\n")
-        f.write(f"{'Confusion metric':20} | {'positive':^12} | {'negative':^12} |\n")
-        f.write("-" * 50 + "\n")
-        f.write(f"{'True':20} | {pd_cm[1][1]:^12} | {pd_cm[0][1]:^12} |\n")
-        f.write(f"{'false':20} | {pd_cm[1][0]:^12} | {pd_cm[0][0]:^12} |\n")
-        f.write("-" * 50 + "\n")
 
 def save_optuna_results(study, fold_idx, output_dir="optuna_studies"):
     
@@ -750,103 +742,30 @@ def save_optuna_results(study, fold_idx, output_dir="optuna_studies"):
     trials_df = study.trials_dataframe()
     trials_df.to_csv(f"{output_dir}/fold_{fold_idx}_trials.csv", index=False)
     
-    # Save summary to TXT
-    with open(f"{output_dir}/fold_{fold_idx}_summary.txt", 'w') as f:
-        f.write(f"OPTUNA STUDY - FOLD {fold_idx}\n")
-        f.write(f"Best Trial Number: {study.best_trial.number}\n")
-        f.write(f"Best Validation Accuracy: {study.best_value:.4f}\n\n")
-        f.write("Best Hyperparameters:\n")
-        for k, v in study.best_params.items():
-            f.write(f"  {k:20s}: {v}\n")
-
-    
 # ============================================================================
 #  Trainer Functions
 # ============================================================================
 
-def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device):
-    """Train for one epoch"""
+def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device, scaler=None):
+    """Train for one epoch with optional AMP mixed precision"""
     model.train()
     train_loss = 0.0
     hc_pd_train_pred, hc_pd_train_labels = [], []
     pd_dd_train_pred, pd_dd_train_labels = [], []
+    use_amp = scaler is not None
     
     for batch in tqdm(dataloader, desc="Training"):
         left_sample, right_sample, hc_pd, pd_dd = batch
         
-        left_sample = left_sample.to(device)
-        right_sample = right_sample.to(device)
-        hc_pd = hc_pd.to(device)
-        pd_dd = pd_dd.to(device)
+        left_sample = left_sample.to(device, non_blocking=True)
+        right_sample = right_sample.to(device, non_blocking=True)
+        hc_pd = hc_pd.to(device, non_blocking=True)
+        pd_dd = pd_dd.to(device, non_blocking=True)
         
-        optimizer.zero_grad()
-        hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device) 
+        optimizer.zero_grad(set_to_none=True)
         
-        total_loss = 0
-        loss_count = 0
-        
-        # HC vs PD loss
-        valid_hc_pd_mask = (hc_pd != -1)
-        if valid_hc_pd_mask.any():
-            valid_logits_hc = hc_pd_logits[valid_hc_pd_mask]
-            valid_labels_hc = hc_pd[valid_hc_pd_mask]
-            loss_hc = criterion_hc(valid_logits_hc, valid_labels_hc)
-            total_loss += loss_hc
-            loss_count += 1
-            
-            preds_hc = torch.argmax(valid_logits_hc, dim=1)
-            hc_pd_train_pred.extend(preds_hc.cpu().numpy())
-            hc_pd_train_labels.extend(valid_labels_hc.cpu().numpy())
-        
-        # PD vs DD loss
-        valid_pd_dd_mask = (pd_dd != -1)
-        if valid_pd_dd_mask.any():
-            valid_logits_pd = pd_dd_logits[valid_pd_dd_mask]
-            valid_labels_pd = pd_dd[valid_pd_dd_mask]
-            loss_pd = criterion_pd(valid_logits_pd, valid_labels_pd)
-            total_loss += loss_pd
-            loss_count += 1
-            
-            preds_pd = torch.argmax(valid_logits_pd, dim=1)
-            pd_dd_train_pred.extend(preds_pd.cpu().numpy())
-            pd_dd_train_labels.extend(valid_labels_pd.cpu().numpy())
-        
-        # Backward pass
-        if loss_count > 0:
-            avg_loss = total_loss / loss_count
-            avg_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            train_loss += avg_loss.item()
-    
-    train_loss /= len(dataloader)
-    
-    # Calculate training metrics
-    train_metrics_hc = calculate_metrics(hc_pd_train_labels, hc_pd_train_pred, 
-                                        "Training HC vs PD", verbose=False)
-    train_metrics_pd = calculate_metrics(pd_dd_train_labels, pd_dd_train_pred, 
-                                        "Training PD vs DD", verbose=False)
-    
-    return train_loss, train_metrics_hc, train_metrics_pd
-
-
-def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device):
-    """Validate for one epoch"""
-    model.eval()
-    val_loss = 0.0
-    hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs = [], [], []
-    pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = [], [], []
-    
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation"):
-            left_sample, right_sample, hc_pd, pd_dd = batch
-            
-            left_sample = left_sample.to(device)
-            right_sample = right_sample.to(device)
-            hc_pd = hc_pd.to(device)
-            pd_dd = pd_dd.to(device)
-            
-            hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device)  
+        with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
+            hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device) 
             
             total_loss = 0
             loss_count = 0
@@ -861,10 +780,8 @@ def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device)
                 loss_count += 1
                 
                 preds_hc = torch.argmax(valid_logits_hc, dim=1)
-                probs_hc = F.softmax(valid_logits_hc, dim=1)[:, 1]
-                hc_pd_val_pred.extend(preds_hc.cpu().numpy())
-                hc_pd_val_labels.extend(valid_labels_hc.cpu().numpy())
-                hc_pd_val_probs.extend(probs_hc.cpu().numpy())
+                hc_pd_train_pred.extend(preds_hc.cpu().numpy())
+                hc_pd_train_labels.extend(valid_labels_hc.cpu().numpy())
             
             # PD vs DD loss
             valid_pd_dd_mask = (pd_dd != -1)
@@ -876,10 +793,86 @@ def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device)
                 loss_count += 1
                 
                 preds_pd = torch.argmax(valid_logits_pd, dim=1)
-                probs_pd = F.softmax(valid_logits_pd, dim=1)[:, 1]
-                pd_dd_val_pred.extend(preds_pd.cpu().numpy())
-                pd_dd_val_labels.extend(valid_labels_pd.cpu().numpy())
-                pd_dd_val_probs.extend(probs_pd.cpu().numpy())
+                pd_dd_train_pred.extend(preds_pd.cpu().numpy())
+                pd_dd_train_labels.extend(valid_labels_pd.cpu().numpy())
+        
+        # Backward pass
+        if loss_count > 0:
+            avg_loss = total_loss / loss_count
+            if use_amp:
+                scaler.scale(avg_loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                avg_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+            train_loss += avg_loss.item()
+    
+    train_loss /= len(dataloader)
+    
+    # Calculate training metrics
+    train_metrics_hc = calculate_metrics(hc_pd_train_labels, hc_pd_train_pred, 
+                                        "Training HC vs PD", verbose=False)
+    train_metrics_pd = calculate_metrics(pd_dd_train_labels, pd_dd_train_pred, 
+                                        "Training PD vs DD", verbose=False)
+    
+    return train_loss, train_metrics_hc, train_metrics_pd
+
+
+def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device, use_amp=False):
+    """Validate for one epoch with optional AMP"""
+    model.eval()
+    val_loss = 0.0
+    hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs = [], [], []
+    pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = [], [], []
+    
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Validation"):
+            left_sample, right_sample, hc_pd, pd_dd = batch
+            
+            left_sample = left_sample.to(device, non_blocking=True)
+            right_sample = right_sample.to(device, non_blocking=True)
+            hc_pd = hc_pd.to(device, non_blocking=True)
+            pd_dd = pd_dd.to(device, non_blocking=True)
+            
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
+                hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device)  
+                
+                total_loss = 0
+                loss_count = 0
+                
+                # HC vs PD loss
+                valid_hc_pd_mask = (hc_pd != -1)
+                if valid_hc_pd_mask.any():
+                    valid_logits_hc = hc_pd_logits[valid_hc_pd_mask]
+                    valid_labels_hc = hc_pd[valid_hc_pd_mask]
+                    loss_hc = criterion_hc(valid_logits_hc, valid_labels_hc)
+                    total_loss += loss_hc
+                    loss_count += 1
+                    
+                    preds_hc = torch.argmax(valid_logits_hc, dim=1)
+                    probs_hc = F.softmax(valid_logits_hc.float(), dim=1)[:, 1]
+                    hc_pd_val_pred.extend(preds_hc.cpu().numpy())
+                    hc_pd_val_labels.extend(valid_labels_hc.cpu().numpy())
+                    hc_pd_val_probs.extend(probs_hc.cpu().numpy())
+                
+                # PD vs DD loss
+                valid_pd_dd_mask = (pd_dd != -1)
+                if valid_pd_dd_mask.any():
+                    valid_logits_pd = pd_dd_logits[valid_pd_dd_mask]
+                    valid_labels_pd = pd_dd[valid_pd_dd_mask]
+                    loss_pd = criterion_pd(valid_logits_pd, valid_labels_pd)
+                    total_loss += loss_pd
+                    loss_count += 1
+                    
+                    preds_pd = torch.argmax(valid_logits_pd, dim=1)
+                    probs_pd = F.softmax(valid_logits_pd.float(), dim=1)[:, 1]
+                    pd_dd_val_pred.extend(preds_pd.cpu().numpy())
+                    pd_dd_val_labels.extend(valid_labels_pd.cpu().numpy())
+                    pd_dd_val_probs.extend(probs_pd.cpu().numpy())
             
             if loss_count > 0:
                 avg_loss = total_loss / loss_count
@@ -890,7 +883,7 @@ def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device)
     return (val_loss, hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs,
             pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs)
 
-def extract_features(model, dataloader, device):
+def extract_features(model, dataloader, device, use_amp=False):
     model.eval()
     all_features = []
     all_hc_pd_labels = []
@@ -900,12 +893,13 @@ def extract_features(model, dataloader, device):
         for batch in tqdm(dataloader, desc="Extracting features"):
             left_sample, right_sample, hc_pd, pd_dd = batch
             
-            left_sample = left_sample.to(device)
-            right_sample = right_sample.to(device)
+            left_sample = left_sample.to(device, non_blocking=True)
+            right_sample = right_sample.to(device, non_blocking=True)
             
-            features = model.get_features(left_sample, right_sample, device) 
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
+                features = model.get_features(left_sample, right_sample, device)
             
-            all_features.append(features.cpu().numpy())
+            all_features.append(features.float().cpu().numpy())
             all_hc_pd_labels.append(hc_pd.numpy())
             all_pd_dd_labels.append(pd_dd.numpy())
     
@@ -922,20 +916,22 @@ def extract_features(model, dataloader, device):
 def objective(trial, train_dataset, val_dataset, base_config, device):
     
     # Sample hyperparameters
-    model_dim = trial.suggest_categorical('model_dim', [32, 64, 128])
+    model_dim = trial.suggest_categorical('model_dim', [32, 64])
     num_heads = trial.suggest_categorical('num_heads', [4, 8])
     num_layers = trial.suggest_int('num_layers', 2, 4)
-    d_ff = trial.suggest_categorical('d_ff', [128, 256, 512])
-    dropout = trial.suggest_float('dropout', 0.1, 0.5)
+    d_ff = trial.suggest_categorical('d_ff', [128, 256])
+    dropout = trial.suggest_float('dropout', 0.1, 0.3)
     learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-2, log=True)
-    batch_size = trial.suggest_categorical('batch_size', [32, 64])
+    batch_size = trial.suggest_categorical('batch_size', [64, 128, 256])
     
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
-                             num_workers=base_config['num_workers'])
+                             num_workers=base_config['num_workers'],
+                             pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
-                           num_workers=base_config['num_workers'])
+                           num_workers=base_config['num_workers'],
+                           pin_memory=True, persistent_workers=True)
     
     # Create model
     model = MainModel(
@@ -955,6 +951,8 @@ def objective(trial, train_dataset, val_dataset, base_config, device):
     
     hc_pd_loss = nn.CrossEntropyLoss()
     pd_dd_loss = nn.CrossEntropyLoss()
+    scaler = torch.amp.GradScaler('cuda', enabled=base_config.get('use_amp', False))
+    use_amp = base_config.get('use_amp', False)
     
     # Training loop 
     best_val_acc = 0.0
@@ -964,12 +962,12 @@ def objective(trial, train_dataset, val_dataset, base_config, device):
     for epoch in range(base_config.get('optuna_epochs', 30)):
         # Train
         train_loss, _, _ = train_single_epoch(
-            model, train_loader, hc_pd_loss, pd_dd_loss, optimizer, device
+            model, train_loader, hc_pd_loss, pd_dd_loss, optimizer, device, scaler
         )
         
         # Validate
         val_results = validate_single_epoch(
-            model, val_loader, hc_pd_loss, pd_dd_loss, device
+            model, val_loader, hc_pd_loss, pd_dd_loss, device, use_amp
         )
         val_loss, hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs, \
         pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = val_results
@@ -1007,11 +1005,43 @@ def train_model(config):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"GPU: {gpu_name}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+        
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        print("TF32 enabled, cuDNN benchmark enabled")
+    
+    use_amp = config.get('use_amp', True) and torch.cuda.is_available()
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    if use_amp:
+        print("AMP mixed precision (bfloat16) enabled")
+    
+    use_compile = config.get('use_compile', True)
+    if use_compile:
+        try:
+            _test = torch.compile
+            print("✓ torch.compile available")
+        except AttributeError:
+            use_compile = False
+            print("⚠ torch.compile not available (PyTorch < 2.0), skipping")
+    
     # Create output directories
     os.makedirs("metrics", exist_ok=True)
     os.makedirs("plots", exist_ok=True)
     os.makedirs("results", exist_ok=True)
     os.makedirs("training_history", exist_ok=True)
+    os.makedirs("checkpoints", exist_ok=True)
+    
+    # Save config.json once before training
+    config_serializable = {k: v for k, v in config.items()
+                           if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+    with open('checkpoints/config.json', 'w') as f:
+        json.dump(config_serializable, f, indent=2)
+    print("✓ Config saved: checkpoints/config.json")
     
     # Load full dataset
     full_dataset = ParkinsonsDataLoader(
@@ -1020,473 +1050,300 @@ def train_model(config):
         apply_bandpass_filter=config['apply_bandpass_filter']
     )
     
-    # Check if using nested CV
-    use_nested_cv = config.get('use_nested_cv', False)
-    
-    if use_nested_cv:
-        # ====================================================================
-        # NESTED CROSS-VALIDATION WITH OPTUNA
-        # ====================================================================
-        os.makedirs("optuna_studies", exist_ok=True)
+    # ====================================================================
+    # NESTED CROSS-VALIDATION WITH OPTUNA
+    # ====================================================================
+    os.makedirs("optuna_studies", exist_ok=True)
         
-        # Outer CV splits
-        outer_folds = full_dataset.get_train_test_split(split_type=3, k=config['outer_folds'])
-        all_outer_results = []
-        best_hyperparams_per_fold = []
+    # Outer CV splits
+    outer_folds = full_dataset.get_train_test_split(split_type=3, k=config['outer_folds'])
+    all_outer_results = []
+    best_hyperparams_per_fold = []
         
-        # OUTER LOOP: Model evaluation
-        for outer_fold_idx, (outer_train_dataset, outer_test_dataset) in enumerate(outer_folds):
-            print(f"\n{'='*80}")
-            print(f"OUTER FOLD {outer_fold_idx + 1}/{config['outer_folds']}")
-            print(f"{'='*80}\n")
+    # OUTER LOOP: Model evaluation
+    for outer_fold_idx, (outer_train_dataset, outer_test_dataset) in enumerate(outer_folds):
+        print(f"\n{'='*80}")
+        print(f"OUTER FOLD {outer_fold_idx + 1}/{config['outer_folds']}")
+        print(f"{'='*80}\n")
+        
+        # INNER LOOP: Hyperparameter optimization
+        print(f"Starting hyperparameter optimization...")
             
-            # INNER LOOP: Hyperparameter optimization
-            print(f"Starting hyperparameter optimization...")
+        inner_folds = k_fold_split_method(config['data_root'], outer_train_dataset, 
+                                         k=config['inner_folds'])
+        
+        # Create Optuna study
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=TPESampler(seed=42),
+            pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=10)
+        )
             
-            inner_folds = k_fold_split_method(config['data_root'], outer_train_dataset, 
-                                             k=config['inner_folds'])
+        # Optimize on each inner fold
+        best_trial_scores = []
+        for inner_fold_idx, (inner_train, inner_val) in enumerate(inner_folds):
+            print(f"\n  Inner Fold {inner_fold_idx + 1}/{config['inner_folds']}")
             
-            # Create Optuna study
-            study = optuna.create_study(
-                direction='maximize',
-                sampler=TPESampler(seed=42),
-                pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=10)
+            study.optimize(
+                lambda trial: objective(trial, inner_train, inner_val, config, device),
+                n_trials=config['n_trials'],
+                show_progress_bar=True
             )
             
-            # Optimize on each inner fold
-            best_trial_scores = []
-            for inner_fold_idx, (inner_train, inner_val) in enumerate(inner_folds):
-                print(f"\n  Inner Fold {inner_fold_idx + 1}/{config['inner_folds']}")
-                
-                study.optimize(
-                    lambda trial: objective(trial, inner_train, inner_val, config, device),
-                    n_trials=config['n_trials'],
-                    show_progress_bar=True
-                )
-                
-                best_trial_scores.append(study.best_value)
-                print(f"    Best accuracy: {study.best_value:.4f}")
+            best_trial_scores.append(study.best_value)
+            print(f"    Best accuracy: {study.best_value:.4f}")
+        
+        # Get best hyperparameters
+        best_params = study.best_params
+        avg_best_score = np.mean(best_trial_scores)
+        
+        print(f"\n  Best hyperparameters:")
+        for param, value in best_params.items():
+            print(f"    {param}: {value}")
+        print(f"  Average validation accuracy: {avg_best_score:.4f}")        
+        best_hyperparams_per_fold.append({
+            'outer_fold': outer_fold_idx + 1,
+            'params': best_params,
+            'avg_val_acc': avg_best_score
+        })
+        
+        # Save Optuna study results
+        save_optuna_results(study, outer_fold_idx + 1)
+        joblib.dump(study, f"optuna_studies/study_outer_fold_{outer_fold_idx + 1}.pkl")
+        
+        print(f"\nTraining final model with best hyperparameters...")
+        
+        train_loader = DataLoader(outer_train_dataset, batch_size=best_params['batch_size'], 
+                                 shuffle=True, num_workers=config['num_workers'],
+                                 pin_memory=True, persistent_workers=True)
+        test_loader = DataLoader(outer_test_dataset, batch_size=best_params['batch_size'], 
+                                shuffle=False, num_workers=config['num_workers'],
+                                pin_memory=True, persistent_workers=True)
+        
+        # Create model with best hyperparameters
+        model = MainModel(
+            input_dim=config['input_dim'],
+            model_dim=best_params['model_dim'],
+            num_heads=best_params['num_heads'],
+            num_layers=best_params['num_layers'],
+            d_ff=best_params['d_ff'],
+            dropout=best_params['dropout'],
+            timestep=config['timestep'],
+            num_classes=config['num_classes']
+        ).to(device)
+        
+        # Compile model for faster execution
+        if use_compile:
+            model = torch.compile(model)
+            print("✓ Model compiled with torch.compile")
+        
+        optimizer = optim.AdamW(model.parameters(), 
+                               lr=best_params['learning_rate'], 
+                               weight_decay=best_params['weight_decay'])
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', 
+                                             factor=0.5, patience=5)
+        
+        hc_pd_loss = nn.CrossEntropyLoss()
+        pd_dd_loss = nn.CrossEntropyLoss()
+        
+        # Training history
+        history = defaultdict(list)
+        best_test_acc = 0.0
+        best_model_state = None
+        best_hc_pd_probs = None
+        best_hc_pd_preds = None
+        best_hc_pd_labels = None
+        best_pd_dd_probs = None
+        best_pd_dd_preds = None
+        best_pd_dd_labels = None
+        fold_metrics_hc = []
+        fold_metrics_pd = []
+        train_metrics_history_hc = []
+        train_metrics_history_pd = []
+        
+        # Train for final epochs with early stopping
+        patience_counter = 0
+        patience_limit = config.get('final_patience', 15)
+        for epoch in range(config['final_epochs']):
+            print(f"\nOuter Fold {outer_fold_idx + 1}, Epoch {epoch + 1}/{config['final_epochs']}")
             
-            # Get best hyperparameters
-            best_params = study.best_params
-            avg_best_score = np.mean(best_trial_scores)
+            train_loss, train_metrics_hc, train_metrics_pd = train_single_epoch(
+                model, train_loader, hc_pd_loss, pd_dd_loss, optimizer, device, scaler
+            )
             
-            print(f"\n  Best hyperparameters:")
-            for param, value in best_params.items():
-                print(f"    {param}: {value}")
-            print(f"  Average validation accuracy: {avg_best_score:.4f}")
-            
-            best_hyperparams_per_fold.append({
-                'outer_fold': outer_fold_idx + 1,
-                'params': best_params,
-                'avg_val_acc': avg_best_score
-            })
-            
-            # Save Optuna study results
-            save_optuna_results(study, outer_fold_idx + 1)
-            joblib.dump(study, f"optuna_studies/study_outer_fold_{outer_fold_idx + 1}.pkl")
-            
-            print(f"\nTraining final model with best hyperparameters...")
-            
-            train_loader = DataLoader(outer_train_dataset, batch_size=best_params['batch_size'], 
-                                     shuffle=True, num_workers=config['num_workers'])
-            test_loader = DataLoader(outer_test_dataset, batch_size=best_params['batch_size'], 
-                                    shuffle=False, num_workers=config['num_workers'])
-            
-            # Create model with best hyperparameters
-            model = MainModel(
-                input_dim=config['input_dim'],
-                model_dim=best_params['model_dim'],
-                num_heads=best_params['num_heads'],
-                num_layers=best_params['num_layers'],
-                d_ff=best_params['d_ff'],
-                dropout=best_params['dropout'],
-                timestep=config['timestep'],
-                num_classes=config['num_classes']
-            ).to(device)
-            
-            optimizer = optim.AdamW(model.parameters(), 
-                                   lr=best_params['learning_rate'], 
-                                   weight_decay=best_params['weight_decay'])
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', 
-                                                 factor=0.5, patience=5)
-            
-            hc_pd_loss = nn.CrossEntropyLoss()
-            pd_dd_loss = nn.CrossEntropyLoss()
-            
-            # Training history
-            history = defaultdict(list)
-            best_test_acc = 0.0
-            best_epoch = 0
-            best_model_state = None
-            best_hc_pd_probs = None
-            best_hc_pd_preds = None
-            best_hc_pd_labels = None
-            best_pd_dd_probs = None
-            best_pd_dd_preds = None
-            best_pd_dd_labels = None
-            
-            # Train for final epochs
-            for epoch in range(config['final_epochs']):
-                print(f"\nOuter Fold {outer_fold_idx + 1}, Epoch {epoch + 1}/{config['final_epochs']}")
-                
-                train_loss, train_metrics_hc, train_metrics_pd = train_single_epoch(
-                    model, train_loader, hc_pd_loss, pd_dd_loss, optimizer, device
-                )
-                
-                test_results = validate_single_epoch(
-                    model, test_loader, hc_pd_loss, pd_dd_loss, device
-                )
-                test_loss, hc_pd_test_pred, hc_pd_test_labels, hc_pd_test_probs, \
-                pd_dd_test_pred, pd_dd_test_labels, pd_dd_test_probs = test_results
-                
-                test_acc_hc = accuracy_score(hc_pd_test_labels, hc_pd_test_pred) if len(hc_pd_test_labels) > 0 else 0
-                test_acc_pd = accuracy_score(pd_dd_test_labels, pd_dd_test_pred) if len(pd_dd_test_labels) > 0 else 0
-                test_acc_combined = (test_acc_hc + test_acc_pd) / 2
-                
-                train_acc_hc = train_metrics_hc.get('accuracy', 0)
-                train_acc_pd = train_metrics_pd.get('accuracy', 0)
-                
-                scheduler.step(test_loss)
-                
-                history['train_loss'].append(train_loss)
-                history['test_loss'].append(test_loss)
-                history['train_acc_hc'].append(train_acc_hc)
-                history['train_acc_pd'].append(train_acc_pd)
-                history['test_acc_hc'].append(test_acc_hc)
-                history['test_acc_pd'].append(test_acc_pd)
-                history['test_acc_combined'].append(test_acc_combined)
-                
-                print(f"Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
-                print(f"Test Acc - HC: {test_acc_hc:.4f}, PD: {test_acc_pd:.4f}, Combined: {test_acc_combined:.4f}")
-                
-                if test_acc_combined > best_test_acc:
-                    best_test_acc = test_acc_combined
-                    best_epoch = epoch + 1
-                    best_model_state = model.state_dict().copy()
-                    
-                    if hc_pd_test_probs:
-                        best_hc_pd_probs = np.array(hc_pd_test_probs)
-                        best_hc_pd_preds = np.array(hc_pd_test_pred)
-                        best_hc_pd_labels = np.array(hc_pd_test_labels)
-                    
-                    if pd_dd_test_probs:
-                        best_pd_dd_probs = np.array(pd_dd_test_probs)
-                        best_pd_dd_preds = np.array(pd_dd_test_pred)
-                        best_pd_dd_labels = np.array(pd_dd_test_labels)
-            
-            # Load best model
-            model.load_state_dict(best_model_state)
-            
-            test_results = validate_single_epoch(model, test_loader, hc_pd_loss, pd_dd_loss, device)
+            test_results = validate_single_epoch(
+                model, test_loader, hc_pd_loss, pd_dd_loss, device, use_amp
+            )
             test_loss, hc_pd_test_pred, hc_pd_test_labels, hc_pd_test_probs, \
             pd_dd_test_pred, pd_dd_test_labels, pd_dd_test_probs = test_results
             
-            final_metrics_hc = calculate_metrics(
+            test_acc_hc = accuracy_score(hc_pd_test_labels, hc_pd_test_pred) if len(hc_pd_test_labels) > 0 else 0
+            test_acc_pd = accuracy_score(pd_dd_test_labels, pd_dd_test_pred) if len(pd_dd_test_labels) > 0 else 0
+            test_acc_combined = (test_acc_hc + test_acc_pd) / 2
+            
+            train_acc_hc = train_metrics_hc.get('accuracy', 0)
+            train_acc_pd = train_metrics_pd.get('accuracy', 0)
+            
+            scheduler.step(test_loss)
+            
+            history['train_loss'].append(train_loss)
+            history['test_loss'].append(test_loss)
+            history['train_acc_hc'].append(train_acc_hc)
+            history['train_acc_pd'].append(train_acc_pd)
+            history['test_acc_hc'].append(test_acc_hc)
+            history['test_acc_pd'].append(test_acc_pd)
+            history['test_acc_combined'].append(test_acc_combined)
+            
+            # Collect per-epoch metrics for comprehensive CSV saving
+            train_metrics_history_hc.append(train_metrics_hc)
+            train_metrics_history_pd.append(train_metrics_pd)
+            
+            test_metrics_hc_epoch = calculate_metrics(
                 hc_pd_test_labels, hc_pd_test_pred,
-                f"Outer Fold {outer_fold_idx + 1} - Test HC vs PD", verbose=True
+                f"Outer Fold {outer_fold_idx + 1} Test HC vs PD", verbose=False
             )
-            final_metrics_pd = calculate_metrics(
+            test_metrics_pd_epoch = calculate_metrics(
                 pd_dd_test_labels, pd_dd_test_pred,
-                f"Outer Fold {outer_fold_idx + 1} - Test PD vs DD", verbose=True
+                f"Outer Fold {outer_fold_idx + 1} Test PD vs DD", verbose=False
             )
+            fold_metrics_hc.append({'epoch': epoch + 1, 'metrics': test_metrics_hc_epoch})
+            fold_metrics_pd.append({'epoch': epoch + 1, 'metrics': test_metrics_pd_epoch})
             
-            test_features, test_hc_pd_labels, test_pd_dd_labels = extract_features(
-                model, test_loader, device
-            )
+            print(f"Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
+            print(f"Test Acc - HC: {test_acc_hc:.4f}, PD: {test_acc_pd:.4f}, Combined: {test_acc_combined:.4f}")
             
-            outer_fold_result = {
-                'outer_fold': outer_fold_idx + 1,
-                'best_hyperparams': best_params,
-                'best_epoch': best_epoch,
-                'best_test_acc': best_test_acc,
-                'final_metrics_hc': final_metrics_hc,
-                'final_metrics_pd': final_metrics_pd,
-                'history': history
-            }
-            all_outer_results.append(outer_fold_result)
-            
-            # Save model
-            torch.save({
-                'model_state_dict': best_model_state,
-                'outer_fold': outer_fold_idx + 1,
-                'best_epoch': best_epoch,
-                'best_test_acc': best_test_acc,
-                'hyperparameters': best_params,
-                'config': config
-            }, f'best_model_nested_cv_fold_{outer_fold_idx + 1}.pth')
-            print(f"✓ Model saved: best_model_nested_cv_fold_{outer_fold_idx + 1}.pth")
-            
-            # Save training history
-            import pandas as pd
-            history_df = pd.DataFrame(history)
-            history_df.to_csv(f"training_history/fold_{outer_fold_idx + 1}_history.csv", index=False)
-            
-            # Save best epoch results
-            save_best_epoch_results(
-                outer_fold_idx, best_epoch,
-                final_metrics_hc, final_metrics_pd,
-                final_metrics_hc['confusion_matrix'], 
-                final_metrics_pd['confusion_matrix'],
-                output_dir="results"
-            )
-            
-            # Generate plots
-            if config.get('create_plots', True):
-                plot_dir = f"plots/nested_cv_fold_{outer_fold_idx + 1}"
-                os.makedirs(plot_dir, exist_ok=True)
+            if test_acc_combined > best_test_acc:
+                best_test_acc = test_acc_combined
+                best_model_state = copy.deepcopy(model.state_dict())
                 
-                plot_loss(history['train_loss'], history['test_loss'], f"{plot_dir}/loss.png")
+                if hc_pd_test_probs:
+                    best_hc_pd_probs = np.array(hc_pd_test_probs)
+                    best_hc_pd_preds = np.array(hc_pd_test_pred)
+                    best_hc_pd_labels = np.array(hc_pd_test_labels)
                 
-                if best_hc_pd_probs is not None and len(best_hc_pd_labels) > 0:
-                    plot_roc_curves(best_hc_pd_labels, best_hc_pd_preds, best_hc_pd_probs,
-                                  f"{plot_dir}/roc_hc_vs_pd.png")
-                
-                if best_pd_dd_probs is not None and len(best_pd_dd_labels) > 0:
-                    plot_roc_curves(best_pd_dd_labels, best_pd_dd_preds, best_pd_dd_probs,
-                                  f"{plot_dir}/roc_pd_vs_dd.png")
-                
-                plot_tsne(test_features, test_hc_pd_labels, test_pd_dd_labels, output_dir=plot_dir)
-                
-                print(f"✓ All plots saved to {plot_dir}")
+                if pd_dd_test_probs:
+                    best_pd_dd_probs = np.array(pd_dd_test_probs)
+                    best_pd_dd_preds = np.array(pd_dd_test_pred)
+                    best_pd_dd_labels = np.array(pd_dd_test_labels)
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience_limit:
+                    print(f"\n  Early stopping at epoch {epoch + 1} (no improvement for {patience_limit} epochs)")
+                    break
         
-        # Save overall nested CV summary
-        with open("results/nested_cv_final_summary.txt", 'w') as f:
-            for r in all_outer_results:
-                f.write(f"\nFold {r['outer_fold']}:\n")
-                f.write(f"  Best Epoch: {r['best_epoch']}\n")
-                f.write(f"  Combined Test Acc: {r['best_test_acc']:.4f}\n")
-                f.write(f"  HC vs PD Acc: {r['final_metrics_hc']['accuracy']:.4f}\n")
-                f.write(f"  PD vs DD Acc: {r['final_metrics_pd']['accuracy']:.4f}\n")
-                f.write(f"  HC Precision: {r['final_metrics_hc']['precision_avg']:.4f}\n")
-                f.write(f"  HC Recall: {r['final_metrics_hc']['recall_avg']:.4f}\n")
-                f.write(f"  HC F1: {r['final_metrics_hc']['f1_avg']:.4f}\n")
-                f.write(f"  PD Precision: {r['final_metrics_pd']['precision_avg']:.4f}\n")
-                f.write(f"  PD Recall: {r['final_metrics_pd']['recall_avg']:.4f}\n")
-                f.write(f"  PD F1: {r['final_metrics_pd']['f1_avg']:.4f}\n")
-            
-            all_test_accs = [r['best_test_acc'] for r in all_outer_results]
-            all_hc_accs = [r['final_metrics_hc']['accuracy'] for r in all_outer_results]
-            all_pd_accs = [r['final_metrics_pd']['accuracy'] for r in all_outer_results]
-            
-            f.write(f"\n" + "="*80 + "\n")
-            f.write(f"OVERALL STATISTICS:\n")
-            f.write(f"  Combined Test Acc: {np.mean(all_test_accs):.4f} ± {np.std(all_test_accs):.4f}\n")
-            f.write(f"  HC vs PD Acc: {np.mean(all_hc_accs):.4f} ± {np.std(all_hc_accs):.4f}\n")
-            f.write(f"  PD vs DD Acc: {np.mean(all_pd_accs):.4f} ± {np.std(all_pd_accs):.4f}\n")
-            
-        print("\n✓ All results, metrics, and plots saved successfully!")
+        # Save comprehensive metrics CSV for this outer fold
+        fold_suffix = f"_nested_cv_fold_{outer_fold_idx + 1}"
+        save_fold_metric(
+            outer_fold_idx, fold_suffix,
+            fold_metrics_hc, fold_metrics_pd,
+            train_metrics_history_hc, train_metrics_history_pd,
+            history['train_loss'], history['test_loss']
+        )
         
-        return all_outer_results
+        # Load best model
+        if best_model_state is None:
+            print(f"WARNING: No best model found for outer fold {outer_fold_idx + 1}, using final epoch.")
+            best_model_state = copy.deepcopy(model.state_dict())
+            best_test_acc = test_acc_combined
+        model.load_state_dict(best_model_state)
+        
+        test_results = validate_single_epoch(model, test_loader, hc_pd_loss, pd_dd_loss, device, use_amp)
+        test_loss, hc_pd_test_pred, hc_pd_test_labels, hc_pd_test_probs, \
+        pd_dd_test_pred, pd_dd_test_labels, pd_dd_test_probs = test_results
+        
+        final_metrics_hc = calculate_metrics(
+            hc_pd_test_labels, hc_pd_test_pred,
+            f"Outer Fold {outer_fold_idx + 1} - Test HC vs PD", verbose=True
+        )
+        final_metrics_pd = calculate_metrics(
+            pd_dd_test_labels, pd_dd_test_pred,
+            f"Outer Fold {outer_fold_idx + 1} - Test PD vs DD", verbose=True
+        )
+        
+        test_features, test_hc_pd_labels, test_pd_dd_labels = extract_features(
+            model, test_loader, device, use_amp
+        )
+        
+        outer_fold_result = {
+            'outer_fold': outer_fold_idx + 1,
+            'best_hyperparams': best_params,
+            'best_test_acc': best_test_acc,
+            'final_metrics_hc': final_metrics_hc,
+            'final_metrics_pd': final_metrics_pd,
+            'history': history
+        }
+        all_outer_results.append(outer_fold_result)
+        
+        # Save model
+        os.makedirs('checkpoints', exist_ok=True)
+        torch.save({
+            'model_state_dict': best_model_state,
+            'outer_fold': outer_fold_idx + 1,
+            'best_test_acc': best_test_acc,
+            'hyperparameters': best_params,
+            'config': config
+        }, f'checkpoints/best_model_nested_cv_fold_{outer_fold_idx + 1}.pth')
+        print(f"✓ Model saved: checkpoints/best_model_nested_cv_fold_{outer_fold_idx + 1}.pth")
+        
+        # Save training history
+        import pandas as pd
+        history_df = pd.DataFrame(history)
+        history_df.to_csv(f"training_history/fold_{outer_fold_idx + 1}_history.csv", index=False)
     
-    else:
-        # ====================================================================
-        # SIMPLE K-FOLD CROSS-VALIDATION
-        # ====================================================================
-        split_type = config.get('split_type', 3)
-        
-        if split_type == 3:
-            fold_datasets = full_dataset.get_train_test_split(split_type=3, k=config['num_folds'])
-            num_folds = len(fold_datasets)
-        else:
-            train_dataset, val_dataset = full_dataset.get_train_test_split(
-                split_type=split_type,
-                split_ratio=config.get('split_ratio', 0.85),
-                train_tasks=config.get('train_tasks', None)
-            )
-            fold_datasets = [(train_dataset, val_dataset)]
-            num_folds = 1
-        
-        all_fold_results = []
-        
-        for fold_idx in range(num_folds):
-            if num_folds > 1:
-                print(f"Starting Fold {fold_idx+1}/{num_folds}")
+        # Generate plots
+        if config.get('create_plots', True):
+            plot_dir = f"plots/nested_cv_fold_{outer_fold_idx + 1}"
+            os.makedirs(plot_dir, exist_ok=True)
             
-            train_dataset, val_dataset = fold_datasets[fold_idx]
+            plot_loss(history['train_loss'], history['test_loss'], f"{plot_dir}/loss.png")
             
-            train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], 
-                                     shuffle=True, num_workers=config['num_workers'])
-            val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], 
-                                   shuffle=False, num_workers=config['num_workers'])
+            if best_hc_pd_probs is not None and len(best_hc_pd_labels) > 0:
+                plot_roc_curves(best_hc_pd_labels, best_hc_pd_preds, best_hc_pd_probs,
+                              f"{plot_dir}/roc_hc_vs_pd.png")
             
-            # Model
-            model = MainModel(
-                input_dim=config['input_dim'],
-                model_dim=config['model_dim'],
-                num_heads=config['num_heads'],
-                num_layers=config['num_layers'],
-                d_ff=config['d_ff'],
-                dropout=config['dropout'],
-                timestep=config['timestep'],
-                num_classes=config['num_classes']
-            ).to(device)
+            if best_pd_dd_probs is not None and len(best_pd_dd_labels) > 0:
+                plot_roc_curves(best_pd_dd_labels, best_pd_dd_preds, best_pd_dd_probs,
+                              f"{plot_dir}/roc_pd_vs_dd.png")
             
-            optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], 
-                                   weight_decay=config['weight_decay'])
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', 
-                                                 factor=0.5, patience=5)
-
+            plot_tsne(test_features, test_hc_pd_labels, test_pd_dd_labels, output_dir=plot_dir)
             
-            hc_pd_loss = nn.CrossEntropyLoss()
-            pd_dd_loss = nn.CrossEntropyLoss()
-            
-            history = defaultdict(list)
-            best_val_acc = 0.0
-            best_epoch = 0
-            fold_metrics_hc = []
-            fold_metrics_pd = []
-            best_hc_pd_probs = None
-            best_hc_pd_preds = None
-            best_hc_pd_labels = None
-            best_pd_dd_probs = None
-            best_pd_dd_preds = None
-            best_pd_dd_labels = None
-            best_val_metrics_hc = None
-            best_val_metrics_pd = None
-            
-            for epoch in range(config['num_epochs']):
-                print(f"\nEpoch {epoch + 1}/{config['num_epochs']}")
-                
-                train_loss, train_metrics_hc, train_metrics_pd = train_single_epoch(
-                    model, train_loader, hc_pd_loss, pd_dd_loss, optimizer, device
-                )
-                
-                val_results = validate_single_epoch(
-                    model, val_loader, hc_pd_loss, pd_dd_loss, device
-                )
-                val_loss, hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs, \
-                pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = val_results
-                
-                val_metrics_hc = calculate_metrics(
-                    hc_pd_val_labels, hc_pd_val_pred,
-                    f"{'Fold ' + str(fold_idx+1) + ' ' if num_folds > 1 else ''}Validation HC vs PD",
-                    verbose=True
-                )
-                val_metrics_pd = calculate_metrics(
-                    pd_dd_val_labels, pd_dd_val_pred,
-                    f"{'Fold ' + str(fold_idx+1) + ' ' if num_folds > 1 else ''}Validation PD vs DD",
-                    verbose=True
-                )
-            
-                if hc_pd_val_labels:
-                    fold_metrics_hc.append({
-                        'epoch': epoch + 1,
-                        'predictions': hc_pd_val_pred.copy(),
-                        'labels': hc_pd_val_labels.copy(),
-                        'metrics': val_metrics_hc
-                    })
-                
-                if pd_dd_val_labels:
-                    fold_metrics_pd.append({
-                        'epoch': epoch + 1,
-                        'predictions': pd_dd_val_pred.copy(),
-                        'labels': pd_dd_val_labels.copy(),
-                        'metrics': val_metrics_pd
-                    })
-                
-                val_acc_hc = val_metrics_hc.get('accuracy', 0)
-                val_acc_pd = val_metrics_pd.get('accuracy', 0)
-                val_acc_combined = (val_acc_hc + val_acc_pd) / 2
-                
-                train_acc_hc = train_metrics_hc.get('accuracy', 0)
-                train_acc_pd = train_metrics_pd.get('accuracy', 0)
-                
-                scheduler.step(val_loss)
-                
-                history['train_loss'].append(train_loss)
-                history['train_acc_hc'].append(train_acc_hc)
-                history['train_acc_pd'].append(train_acc_pd)
-                history['val_loss'].append(val_loss)
-                history['val_acc_hc'].append(val_acc_hc)
-                history['val_acc_pd'].append(val_acc_pd)
-                history['val_acc_combined'].append(val_acc_combined)
-                
-                
-                if val_acc_combined > best_val_acc:
-                    best_val_acc = val_acc_combined
-                    best_epoch = epoch + 1
-                    best_val_metrics_hc = val_metrics_hc
-                    best_val_metrics_pd = val_metrics_pd
-                    
-                    if hc_pd_val_probs:
-                        best_hc_pd_probs = np.array(hc_pd_val_probs)
-                        best_hc_pd_preds = np.array(hc_pd_val_pred)
-                        best_hc_pd_labels = np.array(hc_pd_val_labels)
-                    
-                    if pd_dd_val_probs:
-                        best_pd_dd_probs = np.array(pd_dd_val_probs)
-                        best_pd_dd_preds = np.array(pd_dd_val_pred)
-                        best_pd_dd_labels = np.array(pd_dd_val_labels)
-                    
-                    model_save_name = f'best_model{"_fold_" + str(fold_idx+1) if num_folds > 1 else ""}.pth'
-                    torch.save({
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'fold': fold_idx if num_folds > 1 else None,
-                        'epoch': epoch,
-                        'val_acc_combined': val_acc_combined,
-                        'val_acc_hc': val_acc_hc,
-                        'val_acc_pd': val_acc_pd,
-                        'config': config
-                    }, model_save_name)
-            
-            if config.get('save_metrics', True):
-                fold_suffix = f"_fold_{fold_idx+1}" if num_folds > 1 else ""
-                if fold_metrics_hc and fold_metrics_pd:
-                    save_fold_metric(fold_idx, fold_suffix, best_epoch, best_val_acc,
-                                   fold_metrics_hc, fold_metrics_pd)
-            
-            import pandas as pd
-            history_df = pd.DataFrame(history)
-            fold_suffix = f"_fold_{fold_idx+1}" if num_folds > 1 else ""
-            history_df.to_csv(f"training_history/history{fold_suffix}.csv", index=False)
-            
-            # Save best epoch results
-            if best_val_metrics_hc and best_val_metrics_pd:
-                save_best_epoch_results(
-                    fold_idx if num_folds > 1 else None,
-                    best_epoch,
-                    best_val_metrics_hc, best_val_metrics_pd,
-                    best_val_metrics_hc['confusion_matrix'],
-                    best_val_metrics_pd['confusion_matrix'],
-                    output_dir="results"
-                )
-            
-            # Extract features
-            fold_features, fold_hc_pd_labels, fold_pd_dd_labels = extract_features(
-                model, val_loader, device
-            )
-            
-            fold_result = {
-                'best_val_accuracy': best_val_acc,
-                'history': history,
-                'features': fold_features,
-                'hc_pd_labels': fold_hc_pd_labels,
-                'pd_dd_labels': fold_pd_dd_labels
-            }
-            all_fold_results.append(fold_result)
-            
-            if config.get('create_plots', True):
-                plot_dir = f"plots/{'fold_' + str(fold_idx+1) if num_folds > 1 else 'single_run'}"
-                os.makedirs(plot_dir, exist_ok=True)
-                
-                plot_loss(history['train_loss'], history['val_loss'], f"{plot_dir}/loss.png")
-                
-                if best_hc_pd_probs is not None and len(best_hc_pd_labels) > 0:
-                    plot_roc_curves(best_hc_pd_labels, best_hc_pd_preds, best_hc_pd_probs,
-                                  f"{plot_dir}/roc_hc_vs_pd.png")
-                
-                if best_pd_dd_probs is not None and len(best_pd_dd_labels) > 0:
-                    plot_roc_curves(best_pd_dd_labels, best_pd_dd_preds, best_pd_dd_probs,
-                                  f"{plot_dir}/roc_pd_vs_dd.png")
-                
-                if fold_features is not None:
-                    plot_tsne(fold_features, fold_hc_pd_labels, fold_pd_dd_labels, output_dir=plot_dir)
-                
-        
-        print("\n✓ All results, metrics, and plots saved successfully!")
-        return all_fold_results
+            print(f"✓ All plots saved to {plot_dir}")
+    
+    # Compute and save overall statistics
+    all_test_accs = [r['best_test_acc'] for r in all_outer_results]
+    all_hc_accs = [r['final_metrics_hc'].get('accuracy', 0) for r in all_outer_results]
+    all_pd_accs = [r['final_metrics_pd'].get('accuracy', 0) for r in all_outer_results]
+    
+    print(f"\n" + "="*80)
+    print(f"OVERALL STATISTICS:")
+    print(f"  Combined Test Acc: {np.mean(all_test_accs):.4f} ± {np.std(all_test_accs):.4f}")
+    print(f"  HC vs PD Acc: {np.mean(all_hc_accs):.4f} ± {np.std(all_hc_accs):.4f}")
+    print(f"  PD vs DD Acc: {np.mean(all_pd_accs):.4f} ± {np.std(all_pd_accs):.4f}")
+    
+    # Save overall results to JSON
+    overall_results = {
+        'combined_test_acc_mean': float(np.mean(all_test_accs)),
+        'combined_test_acc_std': float(np.std(all_test_accs)),
+        'hc_vs_pd_acc_mean': float(np.mean(all_hc_accs)),
+        'hc_vs_pd_acc_std': float(np.std(all_hc_accs)),
+        'pd_vs_dd_acc_mean': float(np.mean(all_pd_accs)),
+        'pd_vs_dd_acc_std': float(np.std(all_pd_accs)),
+        'per_fold': [{
+            'fold': r['outer_fold'],
+            'best_test_acc': r['best_test_acc'],
+            'hc_acc': r['final_metrics_hc'].get('accuracy', 0),
+            'pd_acc': r['final_metrics_pd'].get('accuracy', 0),
+            'hyperparams': r['best_hyperparams']
+        } for r in all_outer_results]
+    }
+    with open('results/nested_cv_overall_results.json', 'w') as f:
+        json.dump(overall_results, f, indent=2)
+    print("✓ Overall results saved: results/nested_cv_overall_results.json")
+    
+    print("\n✓ All results, metrics, and plots saved successfully!")
+    
+    return all_outer_results
 
 # ============================================================================
 # MAIN FUNCTION 
@@ -1495,36 +1352,26 @@ def main():
     
     config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True,
+        'apply_downsampling': True, 
         'apply_bandpass_filter': True,
         
-        'use_nested_cv': True,  
+        # Nested CV settings
         'outer_folds': 5,         
         'inner_folds': 3,         
         'n_trials': 20,           
-        'optuna_epochs': 25,      
-        'final_epochs': 80,       
-        
-        'split_type': 3,
-        'split_ratio': 0.85,
-        'train_tasks': None,
-        'num_folds': 5,
-        'num_epochs': 100,
+        'optuna_epochs': 20,      
+        'final_epochs': 60,       
+        'final_patience': 10,     
 
+        # Model architecture
         'input_dim': 6,
-        'model_dim': 64,
-        'num_heads': 8,
-        'num_layers': 3,
-        'd_ff': 256,
-        'dropout': 0.2,
         'timestep': 256,
         'num_classes': 2,
     
-        'batch_size': 64,
-        'learning_rate': 0.0005,
-        'weight_decay': 0.01,
-        'num_workers': 0,
-    
+        # A100 GPU settings
+        'use_amp': True,      
+        'use_compile': True,   
+        'num_workers': 4,     
         'save_metrics': True,
         'create_plots': True,
     }

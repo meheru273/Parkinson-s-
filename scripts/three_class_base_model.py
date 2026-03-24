@@ -6,7 +6,8 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Dict, List, Tuple
 import warnings
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, resample_poly
+from math import gcd
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from sklearn.model_selection import StratifiedKFold
@@ -49,10 +50,10 @@ def create_windows(data, window_size=256, overlap=0):
 
 #down sampling 
 def downsample(data, original_freq=100, target_freq=64):
-    step = int(original_freq // target_freq)  
-    if step > 1:
-        return data[::step, :]
-    return data
+    g = gcd(original_freq, target_freq)
+    up = target_freq // g
+    down = original_freq // g
+    return resample_poly(data, up, down, axis=0)
 
 
 # band pass filter
@@ -525,14 +526,36 @@ def save_fold_metric(fold_idx, fold_suffix, best_epoch, best_val_acc,
     def write_csv(filename, metrics_list):
         with open(filename, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["epoch", "accuracy", "precision", "recall", "f1"])
+            writer.writerow([
+                "epoch",
+                "accuracy",
+                # weighted averages
+                "precision_avg", "recall_avg", "f1_avg",
+                # per-class: HC (0), PD (1), DD (2)
+                "precision_HC", "recall_HC", "f1_HC",
+                "precision_PD", "recall_PD", "f1_PD",
+                "precision_DD", "recall_DD", "f1_DD",
+            ])
             for epoch_data in metrics_list:
+                m = epoch_data['metrics']
+                prec_cls  = m.get('precision_per_class', [0, 0, 0])
+                rec_cls   = m.get('recall_per_class',    [0, 0, 0])
+                f1_cls    = m.get('f1_per_class',        [0, 0, 0])
+                # safely index – guard against fewer classes in a fold
+                def _get(arr, i): return float(arr[i]) if i < len(arr) else 0.0
                 writer.writerow([
                     epoch_data['epoch'],
-                    epoch_data['metrics'].get('accuracy', 0),
-                    epoch_data['metrics'].get('precision_avg', 0),
-                    epoch_data['metrics'].get('recall_avg', 0),
-                    epoch_data['metrics'].get('f1_avg', 0)
+                    m.get('accuracy', 0),
+                    # weighted averages
+                    m.get('precision_avg', 0),
+                    m.get('recall_avg', 0),
+                    m.get('f1_avg', 0),
+                    # HC
+                    _get(prec_cls, 0), _get(rec_cls, 0), _get(f1_cls, 0),
+                    # PD
+                    _get(prec_cls, 1), _get(rec_cls, 1), _get(f1_cls, 1),
+                    # DD
+                    _get(prec_cls, 2), _get(rec_cls, 2), _get(f1_cls, 2),
                 ])
 
     if fold_metrics:
@@ -717,6 +740,14 @@ def train_model(config):
     output_dir = config.get('output_dir', 'output_3class')
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "metrics"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
+    
+    # Save config.json once before training
+    config_serializable = {k: v for k, v in config.items()
+                           if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+    with open(os.path.join(output_dir, 'checkpoints', 'config.json'), 'w') as f:
+        json.dump(config_serializable, f, indent=2)
+    print(f"✓ Config saved: {output_dir}/checkpoints/config.json")
     
     # Load dataset
     full_dataset = ThreeClassDataLoader(
@@ -840,7 +871,7 @@ def train_model(config):
                     best_preds = np.array(val_preds)
                     best_labels = np.array(val_labels)
                 
-                model_save_name = os.path.join(output_dir, 
+                model_save_name = os.path.join(output_dir, 'checkpoints',
                     f'best_model{"_fold_" + str(fold_idx+1) if num_folds > 1 else ""}.pth')
                 torch.save({
                     'model_state_dict': model.state_dict(),
@@ -851,16 +882,6 @@ def train_model(config):
                     'config': config
                 }, model_save_name)
                 print(f"✓ New best model saved: {model_save_name}")
-                
-                # Save config.json alongside the model
-                config_save_name = model_save_name.replace('.pth', '_config.json')
-                config_to_save = {k: v for k, v in config.items()}
-                config_to_save['best_epoch'] = epoch + 1
-                config_to_save['best_val_acc'] = val_acc
-                config_to_save['fold'] = fold_idx if num_folds > 1 else None
-                with open(config_save_name, 'w') as f:
-                    json.dump(config_to_save, f, indent=2)
-                print(f"✓ Config saved: {config_save_name}")
         
         if config.get('save_metrics', True):
             fold_suffix = f"_fold_{fold_idx+1}" if num_folds > 1 else ""
@@ -908,7 +929,7 @@ def main():
     # ---------- shared settings ----------
     base_config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True,
+        'apply_downsampling': True,  # Set to False to skip downsampling (100 Hz → 64 Hz)
         'apply_bandpass_filter': True,
         'split_type': 3,
         'split_ratio': 0.85,

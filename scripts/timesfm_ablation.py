@@ -10,7 +10,8 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Optional
 import warnings
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, resample_poly
+from math import gcd
 import os
 import math
 import csv
@@ -38,10 +39,10 @@ def create_windows(data, window_size=256, overlap=0):
 
 
 def downsample(data, original_freq=100, target_freq=64):
-    step = int(original_freq // target_freq)  
-    if step > 1:
-        return data[::step, :]
-    return data
+    g = gcd(original_freq, target_freq)
+    up = target_freq // g
+    down = original_freq // g
+    return resample_poly(data, up, down, axis=0)
 
 
 def bandpass_filter(signal, original_freq=64, upper_bound=20, lower_bound=0.1):
@@ -486,12 +487,6 @@ def count_parameters(model: nn.Module, trainable_only: bool = False) -> int:
 # ============================================================================
 
 class TimesFMFeatureExtractor(nn.Module):
-    """
-    Wrapper to extract embeddings from TimesFM for classification.
-    
-    TimesFM processes univariate time series, so we process each channel
-    separately and then combine the embeddings.
-    """
     
     def __init__(
         self,
@@ -1101,6 +1096,7 @@ def save_checkpoint(model, optimizer, fold, epoch, val_acc_combined, val_acc_hc,
     }, save_path)
 
 
+
 # ============================================================================
 # TRAINING FUNCTIONS
 # ============================================================================
@@ -1390,6 +1386,14 @@ def train_timesfm_model(config, resume_from_checkpoint=None):
     os.makedirs(f"{output_base}/metrics", exist_ok=True)
     os.makedirs(f"{output_base}/checkpoints", exist_ok=True)
     os.makedirs(f"{output_base}/plots", exist_ok=True)
+    
+    # Save config.json once before training
+    config_serializable = {k: v for k, v in config.items()
+                           if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+    config_serializable['ablation_type'] = ablation_type
+    with open(f'{output_base}/checkpoints/config.json', 'w') as f:
+        json.dump(config_serializable, f, indent=2)
+    print(f"✓ Config saved: {output_base}/checkpoints/config.json")
     
     # Load dataset
     full_dataset = ParkinsonsDataLoader(
@@ -1791,7 +1795,7 @@ def main():
     # Base configuration
     base_config = {
         'data_root': "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True,
+        'apply_downsampling': True,  # Set to False to skip downsampling (100 Hz → 64 Hz)
         'apply_bandpass_filter': True,
         
         # Model settings
