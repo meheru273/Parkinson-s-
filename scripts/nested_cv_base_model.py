@@ -1,49 +1,169 @@
-# ============================================================================
-#  Imports
-# ============================================================================
 import pathlib
 import numpy as np
 import json
 import copy
+import time
 import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Dict, List, Tuple
 import warnings
 from scipy.signal import butter, filtfilt, resample_poly
 from math import gcd
-warnings.filterwarnings("ignore", category=UserWarning)
-
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import train_test_split
-import os
-import numpy as np
-import json
-import matplotlib.pyplot as plt
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import roc_curve, auc
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-from tqdm import tqdm
+import matplotlib.pyplot as plt
 from collections import defaultdict
 import os
-import numpy as np
-import warnings
-import math  
-import csv   
+import math
+import csv
 import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 import joblib
 warnings.filterwarnings('ignore')
-    
+
 # ============================================================================
-#  Helper functions for Data Preprocessing
+#  Checkpoint Helpers
 # ============================================================================
+CHECKPOINT_DIR = "checkpoints"
+RUN_STATE_FILE  = "checkpoints/run_state.json"
+
+# Previous Kaggle run outputs (read-only input mount).
+# The script will fall back to this directory when local resume files are absent.
+PREV_RUN_DIR = "/kaggle/input/notebooks/kawsaralam5811/parkinsons-optuna"
+
+
+def save_checkpoint(outer_fold_idx, epoch, model, optimizer, scheduler, scaler,
+                    history, best_test_acc, best_model_state, patience_counter,
+                    fold_metrics_hc, fold_metrics_pd,
+                    train_metrics_history_hc, train_metrics_history_pd,
+                    best_probs_dict):
+    """Atomically save mid-training state for one outer fold."""
+    path = os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}_mid_training.pth")
+    tmp  = path + ".tmp"
+    torch.save({
+        'outer_fold_idx':           outer_fold_idx,
+        'epoch':                    epoch,
+        'model_state_dict':         model.state_dict(),
+        'optimizer_state_dict':     optimizer.state_dict(),
+        'scheduler_state_dict':     scheduler.state_dict(),
+        'scaler_state_dict':        scaler.state_dict(),
+        'history':                  dict(history),
+        'best_test_acc':            best_test_acc,
+        'best_model_state':         best_model_state,
+        'patience_counter':         patience_counter,
+        'fold_metrics_hc':          fold_metrics_hc,
+        'fold_metrics_pd':          fold_metrics_pd,
+        'train_metrics_history_hc': train_metrics_history_hc,
+        'train_metrics_history_pd': train_metrics_history_pd,
+        'best_probs_dict':          best_probs_dict,
+    }, tmp)
+    os.replace(tmp, path)   # atomic rename – safe if Kaggle is killed mid-write
+    print(f"  [ckpt] fold {outer_fold_idx+1} epoch {epoch+1} saved → {path}")
+
+
+def load_checkpoint(outer_fold_idx, model, optimizer, scheduler, scaler):
+    """Load mid-training checkpoint if it exists.
+    Returns (start_epoch, history, best_test_acc, best_model_state,
+             patience_counter, fold_metrics_hc, fold_metrics_pd,
+             train_metrics_history_hc, train_metrics_history_pd, best_probs_dict)
+    or None if no checkpoint exists.
+    """
+    path = os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}_mid_training.pth")
+    if not os.path.exists(path):
+        return None
+    print(f"  [ckpt] Resuming fold {outer_fold_idx+1} from {path}")
+    ck = torch.load(path, map_location='cpu')
+    model.load_state_dict(ck['model_state_dict'])
+    optimizer.load_state_dict(ck['optimizer_state_dict'])
+    scheduler.load_state_dict(ck['scheduler_state_dict'])
+    scaler.load_state_dict(ck['scaler_state_dict'])
+    history = defaultdict(list, ck['history'])
+    return (
+        ck['epoch'] + 1,          # resume from the NEXT epoch
+        history,
+        ck['best_test_acc'],
+        ck['best_model_state'],
+        ck['patience_counter'],
+        ck['fold_metrics_hc'],
+        ck['fold_metrics_pd'],
+        ck['train_metrics_history_hc'],
+        ck['train_metrics_history_pd'],
+        ck['best_probs_dict'],
+    )
+
+
+def save_run_state(outer_fold_idx, all_outer_results, best_hyperparams_per_fold):
+    """Save global run state so outer folds can be skipped on restart."""
+    def _jsonify(obj):
+        if isinstance(obj, dict):
+            return {k: _jsonify(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_jsonify(v) for v in obj]
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, defaultdict):
+            return dict(obj)
+        return obj
+    state = {
+        'completed_outer_folds': outer_fold_idx + 1,
+        'best_hyperparams_per_fold': _jsonify(best_hyperparams_per_fold),
+        'all_outer_results': _jsonify([
+            {k: v for k, v in r.items() if k != 'history'}
+            for r in all_outer_results
+        ]),
+    }
+    with open(RUN_STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+
+def load_run_state():
+    """Return (completed_folds, best_hyperparams_per_fold, all_outer_results)
+    or (0, [], []) if no run state exists.
+    Falls back to PREV_RUN_DIR when no local run_state.json is present.
+    """
+    # Prefer local (current-run) state; fall back to previous run's state
+    candidate = RUN_STATE_FILE
+    if not os.path.exists(candidate):
+        prev_candidate = os.path.join(PREV_RUN_DIR, "checkpoints/run_state.json")
+        if os.path.exists(prev_candidate):
+            candidate = prev_candidate
+            print(f"  [resume] No local run_state.json found – loading from previous run: {candidate}")
+        else:
+            return 0, [], []
+    with open(candidate, 'r') as f:
+        s = json.load(f)
+    print(f"  [resume] Found run_state.json: {s['completed_outer_folds']} outer folds already done.")
+    return s['completed_outer_folds'], s['best_hyperparams_per_fold'], s['all_outer_results']
+
+
+def fold_is_done(outer_fold_idx):
+    # Check local working directory first
+    local_done = os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}.done")
+    if os.path.exists(local_done):
+        return True
+    # Fall back to previous Kaggle run's output
+    prev_done = os.path.join(PREV_RUN_DIR, "checkpoints", f"fold_{outer_fold_idx+1}.done")
+    return os.path.exists(prev_done)
+
+
+def mark_fold_done(outer_fold_idx):
+    open(os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}.done"), 'w').close()
+    # Remove mid-training checkpoint (no longer needed)
+    mid_ck = os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}_mid_training.pth")
+    if os.path.exists(mid_ck):
+        os.remove(mid_ck)
 def create_windows(data, window_size=256, overlap=0):
     
     n_samples, n_channels = data.shape
@@ -746,15 +866,15 @@ def save_optuna_results(study, fold_idx, output_dir="optuna_studies"):
 #  Trainer Functions
 # ============================================================================
 
-def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device, scaler=None):
-    """Train for one epoch with optional AMP mixed precision"""
+def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer, device, scaler):
+    """Train for one epoch with AMP mixed-precision."""
     model.train()
     train_loss = 0.0
     hc_pd_train_pred, hc_pd_train_labels = [], []
     pd_dd_train_pred, pd_dd_train_labels = [], []
-    use_amp = scaler is not None
+    use_amp = device.type == 'cuda'
     
-    for batch in tqdm(dataloader, desc="Training"):
+    for batch in tqdm(dataloader, desc="Training", leave=False):
         left_sample, right_sample, hc_pd, pd_dd = batch
         
         left_sample = left_sample.to(device, non_blocking=True)
@@ -764,8 +884,8 @@ def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer,
         
         optimizer.zero_grad(set_to_none=True)
         
-        with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
-            hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device) 
+        with autocast(enabled=use_amp):
+            hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device)
             
             total_loss = 0
             loss_count = 0
@@ -796,41 +916,37 @@ def train_single_epoch(model, dataloader, criterion_hc, criterion_pd, optimizer,
                 pd_dd_train_pred.extend(preds_pd.cpu().numpy())
                 pd_dd_train_labels.extend(valid_labels_pd.cpu().numpy())
         
-        # Backward pass
+        # Backward pass with scaler
         if loss_count > 0:
             avg_loss = total_loss / loss_count
-            if use_amp:
-                scaler.scale(avg_loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                avg_loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+            scaler.scale(avg_loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
             train_loss += avg_loss.item()
     
     train_loss /= len(dataloader)
     
     # Calculate training metrics
-    train_metrics_hc = calculate_metrics(hc_pd_train_labels, hc_pd_train_pred, 
+    train_metrics_hc = calculate_metrics(hc_pd_train_labels, hc_pd_train_pred,
                                         "Training HC vs PD", verbose=False)
-    train_metrics_pd = calculate_metrics(pd_dd_train_labels, pd_dd_train_pred, 
+    train_metrics_pd = calculate_metrics(pd_dd_train_labels, pd_dd_train_pred,
                                         "Training PD vs DD", verbose=False)
     
     return train_loss, train_metrics_hc, train_metrics_pd
 
 
-def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device, use_amp=False):
-    """Validate for one epoch with optional AMP"""
+def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device):
+    """Validate for one epoch with AMP mixed-precision."""
     model.eval()
     val_loss = 0.0
     hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs = [], [], []
     pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = [], [], []
+    use_amp = device.type == 'cuda'
     
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation"):
+        for batch in tqdm(dataloader, desc="Validation", leave=False):
             left_sample, right_sample, hc_pd, pd_dd = batch
             
             left_sample = left_sample.to(device, non_blocking=True)
@@ -838,8 +954,8 @@ def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device,
             hc_pd = hc_pd.to(device, non_blocking=True)
             pd_dd = pd_dd.to(device, non_blocking=True)
             
-            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
-                hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device)  
+            with autocast(enabled=use_amp):
+                hc_pd_logits, pd_dd_logits = model(left_sample, right_sample, device)
                 
                 total_loss = 0
                 loss_count = 0
@@ -883,7 +999,7 @@ def validate_single_epoch(model, dataloader, criterion_hc, criterion_pd, device,
     return (val_loss, hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs,
             pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs)
 
-def extract_features(model, dataloader, device, use_amp=False):
+def extract_features(model, dataloader, device):
     model.eval()
     all_features = []
     all_hc_pd_labels = []
@@ -893,13 +1009,12 @@ def extract_features(model, dataloader, device, use_amp=False):
         for batch in tqdm(dataloader, desc="Extracting features"):
             left_sample, right_sample, hc_pd, pd_dd = batch
             
-            left_sample = left_sample.to(device, non_blocking=True)
-            right_sample = right_sample.to(device, non_blocking=True)
+            left_sample = left_sample.to(device)
+            right_sample = right_sample.to(device)
             
-            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
-                features = model.get_features(left_sample, right_sample, device)
+            features = model.get_features(left_sample, right_sample, device) 
             
-            all_features.append(features.float().cpu().numpy())
+            all_features.append(features.cpu().numpy())
             all_hc_pd_labels.append(hc_pd.numpy())
             all_pd_dd_labels.append(pd_dd.numpy())
     
@@ -919,19 +1034,22 @@ def objective(trial, train_dataset, val_dataset, base_config, device):
     model_dim = trial.suggest_categorical('model_dim', [32, 64])
     num_heads = trial.suggest_categorical('num_heads', [4, 8])
     num_layers = trial.suggest_int('num_layers', 2, 4)
-    d_ff = trial.suggest_categorical('d_ff', [128, 256])
-    dropout = trial.suggest_float('dropout', 0.1, 0.3)
+    d_ff = trial.suggest_categorical('d_ff', [128, 256, 512])
+    dropout = trial.suggest_float('dropout', 0.1, 0.5)
     learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-2, log=True)
-    batch_size = trial.suggest_categorical('batch_size', [64, 128, 256])
+    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
+    
+    num_workers = base_config['num_workers']
+    pin = base_config.get('pin_memory', True) and device.type == 'cuda'
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
-                             num_workers=base_config['num_workers'],
-                             pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
-                           num_workers=base_config['num_workers'],
-                           pin_memory=True, persistent_workers=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                             num_workers=num_workers, pin_memory=pin,
+                             persistent_workers=(num_workers > 0))
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                           num_workers=num_workers, pin_memory=pin,
+                           persistent_workers=(num_workers > 0))
     
     # Create model
     model = MainModel(
@@ -946,28 +1064,27 @@ def objective(trial, train_dataset, val_dataset, base_config, device):
     ).to(device)
     
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', 
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
                                                  factor=0.5, patience=5)
+    scaler = GradScaler(enabled=(device.type == 'cuda'))
     
     hc_pd_loss = nn.CrossEntropyLoss()
     pd_dd_loss = nn.CrossEntropyLoss()
-    scaler = torch.amp.GradScaler('cuda', enabled=base_config.get('use_amp', False))
-    use_amp = base_config.get('use_amp', False)
     
-    # Training loop 
+    # Training loop
     best_val_acc = 0.0
     patience_counter = 0
     patience_limit = 10
     
     for epoch in range(base_config.get('optuna_epochs', 30)):
-        # Train
+        # Train (suppress per-batch tqdm inside Optuna to keep output clean)
         train_loss, _, _ = train_single_epoch(
             model, train_loader, hc_pd_loss, pd_dd_loss, optimizer, device, scaler
         )
         
         # Validate
         val_results = validate_single_epoch(
-            model, val_loader, hc_pd_loss, pd_dd_loss, device, use_amp
+            model, val_loader, hc_pd_loss, pd_dd_loss, device
         )
         val_loss, hc_pd_val_pred, hc_pd_val_labels, hc_pd_val_probs, \
         pd_dd_val_pred, pd_dd_val_labels, pd_dd_val_probs = val_results
@@ -1005,29 +1122,14 @@ def train_model(config):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    if torch.cuda.is_available():
-        gpu_name = torch.cuda.get_device_name(0)
-        print(f"GPU: {gpu_name}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
-        
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    # Enable cuDNN auto-tuner (speeds up fixed-shape inputs like ours)
+    if device.type == 'cuda':
         torch.backends.cudnn.benchmark = True
-        print("TF32 enabled, cuDNN benchmark enabled")
+        torch.backends.cudnn.deterministic = False
     
-    use_amp = config.get('use_amp', True) and torch.cuda.is_available()
-    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
-    if use_amp:
-        print("AMP mixed precision (bfloat16) enabled")
-    
-    use_compile = config.get('use_compile', True)
-    if use_compile:
-        try:
-            _test = torch.compile
-            print("✓ torch.compile available")
-        except AttributeError:
-            use_compile = False
-            print("⚠ torch.compile not available (PyTorch < 2.0), skipping")
+    # shared AMP scaler for the final training phase
+    scaler = GradScaler(enabled=(device.type == 'cuda'))
+    pin = device.type == 'cuda'
     
     # Create output directories
     os.makedirs("metrics", exist_ok=True)
@@ -1057,14 +1159,20 @@ def train_model(config):
         
     # Outer CV splits
     outer_folds = full_dataset.get_train_test_split(split_type=3, k=config['outer_folds'])
-    all_outer_results = []
-    best_hyperparams_per_fold = []
-        
+    
+    # ── Resume: load global run state ────────────────────────────────────────
+    completed_folds, best_hyperparams_per_fold, all_outer_results = load_run_state()
+    
     # OUTER LOOP: Model evaluation
     for outer_fold_idx, (outer_train_dataset, outer_test_dataset) in enumerate(outer_folds):
         print(f"\n{'='*80}")
         print(f"OUTER FOLD {outer_fold_idx + 1}/{config['outer_folds']}")
         print(f"{'='*80}\n")
+        
+        # Skip already-completed folds
+        if fold_is_done(outer_fold_idx):
+            print(f"  [resume] Outer fold {outer_fold_idx+1} already done – skipping.")
+            continue
         
         # INNER LOOP: Hyperparameter optimization
         print(f"Starting hyperparameter optimization...")
@@ -1072,21 +1180,39 @@ def train_model(config):
         inner_folds = k_fold_split_method(config['data_root'], outer_train_dataset, 
                                          k=config['inner_folds'])
         
-        # Create Optuna study
+        # Create Optuna study with SQLite storage so it survives interruptions
+        storage_url = f"sqlite:///optuna_studies/study_outer_fold_{outer_fold_idx+1}.db"
+        study_name  = f"nested_cv_outer_{outer_fold_idx+1}"
         study = optuna.create_study(
+            study_name=study_name,
+            storage=storage_url,
+            load_if_exists=True,   # resumes existing study
             direction='maximize',
             sampler=TPESampler(seed=42),
-            pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=10)
+            pruner=MedianPruner(n_startup_trials=3, n_warmup_steps=5)
         )
+        already_done = len([t for t in study.trials
+                            if t.state == optuna.trial.TrialState.COMPLETE])
+        trials_needed = config['n_trials'] * config['inner_folds']
+        print(f"  Optuna study: {already_done}/{trials_needed} trials already done.")
             
         # Optimize on each inner fold
         best_trial_scores = []
         for inner_fold_idx, (inner_train, inner_val) in enumerate(inner_folds):
-            print(f"\n  Inner Fold {inner_fold_idx + 1}/{config['inner_folds']}")
+            # Check how many trials this inner fold needs to run
+            inner_trials_done = already_done - inner_fold_idx * config['n_trials']
+            remaining = max(0, config['n_trials'] - inner_trials_done)
+            if remaining == 0:
+                # This inner fold is fully optimised – recover best value from study
+                best_trial_scores.append(study.best_value)
+                print(f"  Inner Fold {inner_fold_idx+1}: already complete (skipping).")
+                continue
+            print(f"\n  Inner Fold {inner_fold_idx + 1}/{config['inner_folds']} "
+                  f"({remaining}/{config['n_trials']} trials remaining)")
             
             study.optimize(
-                lambda trial: objective(trial, inner_train, inner_val, config, device),
-                n_trials=config['n_trials'],
+                lambda trial, tr=inner_train, vl=inner_val: objective(trial, tr, vl, config, device),
+                n_trials=remaining,
                 show_progress_bar=True
             )
             
@@ -1107,18 +1233,18 @@ def train_model(config):
             'avg_val_acc': avg_best_score
         })
         
-        # Save Optuna study results
+        # Save Optuna study results (CSV summary)
         save_optuna_results(study, outer_fold_idx + 1)
-        joblib.dump(study, f"optuna_studies/study_outer_fold_{outer_fold_idx + 1}.pkl")
+        # SQLite DB already saved continuously – no joblib dump needed
         
         print(f"\nTraining final model with best hyperparameters...")
         
-        train_loader = DataLoader(outer_train_dataset, batch_size=best_params['batch_size'], 
+        train_loader = DataLoader(outer_train_dataset, batch_size=best_params['batch_size'],
                                  shuffle=True, num_workers=config['num_workers'],
-                                 pin_memory=True, persistent_workers=True)
-        test_loader = DataLoader(outer_test_dataset, batch_size=best_params['batch_size'], 
+                                 pin_memory=pin, persistent_workers=(config['num_workers'] > 0))
+        test_loader = DataLoader(outer_test_dataset, batch_size=best_params['batch_size'],
                                 shuffle=False, num_workers=config['num_workers'],
-                                pin_memory=True, persistent_workers=True)
+                                pin_memory=pin, persistent_workers=(config['num_workers'] > 0))
         
         # Create model with best hyperparameters
         model = MainModel(
@@ -1132,11 +1258,6 @@ def train_model(config):
             num_classes=config['num_classes']
         ).to(device)
         
-        # Compile model for faster execution
-        if use_compile:
-            model = torch.compile(model)
-            print("✓ Model compiled with torch.compile")
-        
         optimizer = optim.AdamW(model.parameters(), 
                                lr=best_params['learning_rate'], 
                                weight_decay=best_params['weight_decay'])
@@ -1146,25 +1267,39 @@ def train_model(config):
         hc_pd_loss = nn.CrossEntropyLoss()
         pd_dd_loss = nn.CrossEntropyLoss()
         
-        # Training history
-        history = defaultdict(list)
-        best_test_acc = 0.0
-        best_model_state = None
-        best_hc_pd_probs = None
-        best_hc_pd_preds = None
-        best_hc_pd_labels = None
-        best_pd_dd_probs = None
-        best_pd_dd_preds = None
-        best_pd_dd_labels = None
-        fold_metrics_hc = []
-        fold_metrics_pd = []
-        train_metrics_history_hc = []
-        train_metrics_history_pd = []
+        # ── Attempt to resume from a mid-training checkpoint ──────────────
+        ck = load_checkpoint(outer_fold_idx, model, optimizer, scheduler, scaler)
+        if ck is not None:
+            (start_epoch, history, best_test_acc, best_model_state,
+             patience_counter, fold_metrics_hc, fold_metrics_pd,
+             train_metrics_history_hc, train_metrics_history_pd,
+             best_probs_dict) = ck
+            best_hc_pd_probs   = best_probs_dict.get('hc_pd_probs')
+            best_hc_pd_preds   = best_probs_dict.get('hc_pd_preds')
+            best_hc_pd_labels  = best_probs_dict.get('hc_pd_labels')
+            best_pd_dd_probs   = best_probs_dict.get('pd_dd_probs')
+            best_pd_dd_preds   = best_probs_dict.get('pd_dd_preds')
+            best_pd_dd_labels  = best_probs_dict.get('pd_dd_labels')
+            print(f"  Resuming from epoch {start_epoch} "
+                  f"(best acc so far: {best_test_acc:.4f}, patience: {patience_counter})")
+        else:
+            start_epoch             = 0
+            history                 = defaultdict(list)
+            best_test_acc           = 0.0
+            best_model_state        = None
+            patience_counter        = 0
+            best_hc_pd_probs = best_hc_pd_preds = best_hc_pd_labels = None
+            best_pd_dd_probs = best_pd_dd_preds = best_pd_dd_labels = None
+            fold_metrics_hc         = []
+            fold_metrics_pd         = []
+            train_metrics_history_hc = []
+            train_metrics_history_pd = []
         
-        # Train for final epochs with early stopping
-        patience_counter = 0
-        patience_limit = config.get('final_patience', 15)
-        for epoch in range(config['final_epochs']):
+        patience_limit     = config.get('patience', 15)
+        ckpt_interval      = config.get('checkpoint_interval', 5)
+        
+        # Final training loop with early stopping
+        for epoch in range(start_epoch, config['final_epochs']):
             print(f"\nOuter Fold {outer_fold_idx + 1}, Epoch {epoch + 1}/{config['final_epochs']}")
             
             train_loss, train_metrics_hc, train_metrics_pd = train_single_epoch(
@@ -1172,7 +1307,7 @@ def train_model(config):
             )
             
             test_results = validate_single_epoch(
-                model, test_loader, hc_pd_loss, pd_dd_loss, device, use_amp
+                model, test_loader, hc_pd_loss, pd_dd_loss, device
             )
             test_loss, hc_pd_test_pred, hc_pd_test_labels, hc_pd_test_probs, \
             pd_dd_test_pred, pd_dd_test_labels, pd_dd_test_probs = test_results
@@ -1215,6 +1350,7 @@ def train_model(config):
             if test_acc_combined > best_test_acc:
                 best_test_acc = test_acc_combined
                 best_model_state = copy.deepcopy(model.state_dict())
+                patience_counter = 0
                 
                 if hc_pd_test_probs:
                     best_hc_pd_probs = np.array(hc_pd_test_probs)
@@ -1225,12 +1361,28 @@ def train_model(config):
                     best_pd_dd_probs = np.array(pd_dd_test_probs)
                     best_pd_dd_preds = np.array(pd_dd_test_pred)
                     best_pd_dd_labels = np.array(pd_dd_test_labels)
-                patience_counter = 0
             else:
                 patience_counter += 1
                 if patience_counter >= patience_limit:
-                    print(f"\n  Early stopping at epoch {epoch + 1} (no improvement for {patience_limit} epochs)")
+                    print(f"  Early stopping at epoch {epoch+1} (patience={patience_limit})")
                     break
+            
+            # ── Periodic checkpoint save ────────────────────────────────────
+            if (epoch + 1) % ckpt_interval == 0:
+                save_checkpoint(
+                    outer_fold_idx, epoch, model, optimizer, scheduler, scaler,
+                    history, best_test_acc, best_model_state, patience_counter,
+                    fold_metrics_hc, fold_metrics_pd,
+                    train_metrics_history_hc, train_metrics_history_pd,
+                    best_probs_dict={
+                        'hc_pd_probs':  best_hc_pd_probs,
+                        'hc_pd_preds':  best_hc_pd_preds,
+                        'hc_pd_labels': best_hc_pd_labels,
+                        'pd_dd_probs':  best_pd_dd_probs,
+                        'pd_dd_preds':  best_pd_dd_preds,
+                        'pd_dd_labels': best_pd_dd_labels,
+                    }
+                )
         
         # Save comprehensive metrics CSV for this outer fold
         fold_suffix = f"_nested_cv_fold_{outer_fold_idx + 1}"
@@ -1248,7 +1400,7 @@ def train_model(config):
             best_test_acc = test_acc_combined
         model.load_state_dict(best_model_state)
         
-        test_results = validate_single_epoch(model, test_loader, hc_pd_loss, pd_dd_loss, device, use_amp)
+        test_results = validate_single_epoch(model, test_loader, hc_pd_loss, pd_dd_loss, device)
         test_loss, hc_pd_test_pred, hc_pd_test_labels, hc_pd_test_probs, \
         pd_dd_test_pred, pd_dd_test_labels, pd_dd_test_probs = test_results
         
@@ -1262,7 +1414,7 @@ def train_model(config):
         )
         
         test_features, test_hc_pd_labels, test_pd_dd_labels = extract_features(
-            model, test_loader, device, use_amp
+            model, test_loader, device
         )
         
         outer_fold_result = {
@@ -1275,8 +1427,7 @@ def train_model(config):
         }
         all_outer_results.append(outer_fold_result)
         
-        # Save model
-        os.makedirs('checkpoints', exist_ok=True)
+        # Save best model
         torch.save({
             'model_state_dict': best_model_state,
             'outer_fold': outer_fold_idx + 1,
@@ -1290,6 +1441,11 @@ def train_model(config):
         import pandas as pd
         history_df = pd.DataFrame(history)
         history_df.to_csv(f"training_history/fold_{outer_fold_idx + 1}_history.csv", index=False)
+        
+        # Mark fold as complete and save global run state
+        mark_fold_done(outer_fold_idx)
+        save_run_state(outer_fold_idx, all_outer_results, best_hyperparams_per_fold)
+        print(f"  [ckpt] Outer fold {outer_fold_idx+1} marked as done.")
     
         # Generate plots
         if config.get('create_plots', True):
@@ -1352,7 +1508,7 @@ def main():
     
     config = {
         'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True, 
+        'apply_downsampling': True,  
         'apply_bandpass_filter': True,
         
         # Nested CV settings
@@ -1360,20 +1516,22 @@ def main():
         'inner_folds': 3,         
         'n_trials': 20,           
         'optuna_epochs': 20,      
-        'final_epochs': 60,       
-        'final_patience': 10,     
+        'final_epochs': 80,       
 
         # Model architecture
         'input_dim': 6,
         'timestep': 256,
         'num_classes': 2,
     
-        # A100 GPU settings
-        'use_amp': True,      
-        'use_compile': True,   
-        'num_workers': 4,     
+        # General
+        'num_workers': 4,            # Kaggle typically has 4 CPU cores
+        'pin_memory': True,          # Faster CPU→GPU transfers (auto-disabled on CPU)
         'save_metrics': True,
         'create_plots': True,
+
+        # Resumable training
+        'patience': 10,              # Early stopping patience for final training
+        'checkpoint_interval': 5,    # Save mid-training checkpoint every N epochs
     }
     
     results = train_model(config)

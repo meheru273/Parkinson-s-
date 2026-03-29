@@ -740,14 +740,6 @@ def train_model(config):
     output_dir = config.get('output_dir', 'output_3class')
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "metrics"), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
-    
-    # Save config.json once before training
-    config_serializable = {k: v for k, v in config.items()
-                           if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
-    with open(os.path.join(output_dir, 'checkpoints', 'config.json'), 'w') as f:
-        json.dump(config_serializable, f, indent=2)
-    print(f"✓ Config saved: {output_dir}/checkpoints/config.json")
     
     # Load dataset
     full_dataset = ThreeClassDataLoader(
@@ -871,7 +863,7 @@ def train_model(config):
                     best_preds = np.array(val_preds)
                     best_labels = np.array(val_labels)
                 
-                model_save_name = os.path.join(output_dir, 'checkpoints',
+                model_save_name = os.path.join(output_dir, 
                     f'best_model{"_fold_" + str(fold_idx+1) if num_folds > 1 else ""}.pth')
                 torch.save({
                     'model_state_dict': model.state_dict(),
@@ -882,6 +874,16 @@ def train_model(config):
                     'config': config
                 }, model_save_name)
                 print(f"✓ New best model saved: {model_save_name}")
+                
+                # Save config.json alongside the model
+                config_save_name = model_save_name.replace('.pth', '_config.json')
+                config_to_save = {k: v for k, v in config.items()}
+                config_to_save['best_epoch'] = epoch + 1
+                config_to_save['best_val_acc'] = val_acc
+                config_to_save['fold'] = fold_idx if num_folds > 1 else None
+                with open(config_save_name, 'w') as f:
+                    json.dump(config_to_save, f, indent=2)
+                print(f"✓ Config saved: {config_save_name}")
         
         if config.get('save_metrics', True):
             fold_suffix = f"_fold_{fold_idx+1}" if num_folds > 1 else ""
@@ -928,8 +930,8 @@ def main():
     
     # ---------- shared settings ----------
     base_config = {
-        'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True,  # Set to False to skip downsampling (100 Hz → 64 Hz)
+        'data_root': "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+        'apply_downsampling': True,  
         'apply_bandpass_filter': True,
         'split_type': 3,
         'split_ratio': 0.85,
@@ -942,7 +944,7 @@ def main():
         'num_workers': 0,
         'save_metrics': True,
         'create_plots': True,
-        'max_folds_to_train': 1,
+        'max_folds_to_train': 5,
         'output_dir': 'output_3class',
     }
     
