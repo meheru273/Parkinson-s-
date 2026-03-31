@@ -384,18 +384,6 @@ probabilities for HC vs.~PD (sample space $y \in \{\text{HC},
 \text{DD}\}$). The PD--DD boundary is especially challenging due to
 the overlap of motor patterns between the two groups.
 
-%bring back these formulas from the main.tex. 
-This study aims to develop a method for classifying Parkinson's Disease (PD) from Healthy Controls (HC) and Differential Diagnosis (DD) using time-series data collected from wearable IMU sensors.
-Each input sample contains left ($L$) and right ($R$) wrist signal pairs, which we can denote as:
-$\mathbf{X} = (\mathbf{X}^L, \mathbf{X}^R) \in \mathbb{R}^{T \times 2C}$,
-where $C{=}6$ denotes the number of sensor channels per wrist, $2C{=}12$ is the total number of channels across both wrists, and $T{=}256$ is the total number of timesteps in a sample.
-Each sample is associated with a class label $y \in \{\text{HC}, \text{PD}, \text{DD}\}$.
-
-Instead of considering the samples as three independent classes, we divide the classification problem into two distinct hierarchical binary classifiers. The model learns a mapping function
-$f : \mathbb{R}^{T \times 2C} \rightarrow [0,1]^2$, where the model predicts two probabilities corresponding to HC-PD (from the sample space $y \in \{\text{HC}, \text{PD}\}$) and PD-DD (from the sample space $y \in \{\text{PD}, \text{DD}\}$).
-The PD-DD boundary shares similar motor patterns, Making partitioning this second decision boundary more challenging.
-
-
 \subsection{Data Preprocessing}
 
 \subsubsection{Label Encoding}

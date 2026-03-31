@@ -37,7 +37,7 @@ RUN_STATE_FILE  = "checkpoints/run_state.json"
 
 # Previous Kaggle run outputs (read-only input mount).
 # The script will fall back to this directory when local resume files are absent.
-PREV_RUN_DIR = "/kaggle/input/notebooks/kawsaralam5811/parkinsons-optuna"
+PREV_RUN_DIR = ""  # Set from config['resume_from'] at runtime
 
 
 def save_checkpoint(outer_fold_idx, epoch, model, optimizer, scheduler, scaler,
@@ -1161,6 +1161,8 @@ def train_model(config):
     outer_folds = full_dataset.get_train_test_split(split_type=3, k=config['outer_folds'])
     
     # ── Resume: load global run state ────────────────────────────────────────
+    global PREV_RUN_DIR
+    PREV_RUN_DIR = config.get('resume_from', '')
     completed_folds, best_hyperparams_per_fold, all_outer_results = load_run_state()
     
     # OUTER LOOP: Model evaluation
@@ -1532,6 +1534,7 @@ def main():
         # Resumable training
         'patience': 10,              # Early stopping patience for final training
         'checkpoint_interval': 5,    # Save mid-training checkpoint every N epochs
+        'resume_from': "/kaggle/input/notebooks/kawsaralam5811/ncv-base2",  # Previous run output dir (empty string to disable)
     }
     
     results = train_model(config)

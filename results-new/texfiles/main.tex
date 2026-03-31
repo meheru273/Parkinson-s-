@@ -293,7 +293,7 @@ The infoNCE(Information Noise-Contrastive Estimation ) loss compels embedding of
 \end{equation}
 
 where $\mathrm{sim}(\cdot,\cdot)$ denotes cosine similarity and $\tau$ is a temperature hyperparameter. After pre-training, the encoder is fine-tuned end-to-end on the labeled downstream task.
-%problem formulation is important, need to add them from the main.tex.
+
 
 % ════════════════════════════════════════════════════════════════════
 % V. EXPERIMENTS AND RESULTS
@@ -312,7 +312,11 @@ where $\mathrm{sim}(\cdot,\cdot)$ denotes cosine similarity and $\tau$ is a temp
 %          Add a table comparing your method against prior published results
 %          on the same dataset (or closest available). Without this,
 %          reviewers cannot assess whether 92.83% is a strong result.
-%   
+%   [TODO] MISSING: Per-fold breakdown table. Add a table like:
+%          Fold | HC-PD Acc | PD-DD Acc | Combined
+%            1  |  ...      |  ...      |  ...
+%            2  |  ...      |  ...      |  ...
+%          so readers can verify consistency across folds, not just mean±std.
 %   [TODO] Setup subsection is scattered across Implementation Details
 %          (at the end) and inline text. Consider adding a short
 %          \subsection{Experimental Setup} at the start of this section.

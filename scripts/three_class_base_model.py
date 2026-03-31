@@ -484,9 +484,13 @@ def calculate_metrics(y_true, y_pred, task_name="", verbose=True):
     precision_avg, recall_avg, f1_avg, _ = precision_recall_fscore_support(y_true, y_pred, average='weighted', zero_division=0)
     
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1, 2])
-    
+
+    row_sums = cm.sum(axis=1)
+    accuracy_per_class = np.where(row_sums > 0, cm.diagonal() / row_sums, 0.0)
+
     metrics = {
         'accuracy': accuracy,
+        'accuracy_per_class': accuracy_per_class,
         'precision_per_class': precision,
         'recall_per_class': recall,
         'f1_per_class': f1,
@@ -529,6 +533,8 @@ def save_fold_metric(fold_idx, fold_suffix, best_epoch, best_val_acc,
             writer.writerow([
                 "epoch",
                 "accuracy",
+                # per-class accuracy: HC (0), PD (1), DD (2)
+                "accuracy_HC", "accuracy_PD", "accuracy_DD",
                 # weighted averages
                 "precision_avg", "recall_avg", "f1_avg",
                 # per-class: HC (0), PD (1), DD (2)
@@ -538,6 +544,7 @@ def save_fold_metric(fold_idx, fold_suffix, best_epoch, best_val_acc,
             ])
             for epoch_data in metrics_list:
                 m = epoch_data['metrics']
+                acc_cls   = m.get('accuracy_per_class',  [0, 0, 0])
                 prec_cls  = m.get('precision_per_class', [0, 0, 0])
                 rec_cls   = m.get('recall_per_class',    [0, 0, 0])
                 f1_cls    = m.get('f1_per_class',        [0, 0, 0])
@@ -546,6 +553,8 @@ def save_fold_metric(fold_idx, fold_suffix, best_epoch, best_val_acc,
                 writer.writerow([
                     epoch_data['epoch'],
                     m.get('accuracy', 0),
+                    # per-class accuracy
+                    _get(acc_cls, 0), _get(acc_cls, 1), _get(acc_cls, 2),
                     # weighted averages
                     m.get('precision_avg', 0),
                     m.get('recall_avg', 0),

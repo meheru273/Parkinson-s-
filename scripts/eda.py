@@ -611,121 +611,306 @@ def plot_overlapping_windows(data_root: str,
     return fig
 
 
-# ── Plot 3: Bandpass Filter Comparison ───────────────────────────────────────
 
-def plot_bandpass_comparison(data_root: str,
-                             patient_id=None,
-                             task: str = 'Relaxed',
-                             channel: int = 0,
-                             save_path: str = 'eda_bandpass_comparison.png'):
+def plot_bilateral_imu_signals(data_root: str,
+                               task: str = 'Relaxed',
+                               save_path: str = 'eda_bilateral_signals.png'):
     """
-    Plot a side-by-side comparison of:
-      - Raw (downsampled, no filter) vs Bandpass filtered signal
-    Also shows the frequency spectrum (FFT) for both versions.
+    2 × 2 grid of square subplots:
+      Col 0 = Left Wrist  |  Col 1 = Right Wrist
+      Row 0 = Acc magnitude (√x²+y²+z²)
+      Row 1 = Gyro magnitude (√x²+y²+z²)
+
+    Styled like the reference GRF image:
+      - White background with full border box
+      - Blue = HC, Red = PD, Green = DD
+      - Legend in top-right corner of each subplot
+      - Italic bold title inside each subplot
     """
-    # Find a PD patient if none specified (most interesting for tremor freq)
-    if patient_id is None:
-        patient_map = _find_representative_patients(data_root, task)
-        patient_id = patient_map.get('PD') or patient_map.get('HC') or 1
+    from matplotlib.lines import Line2D
 
-    raw = _load_raw_signal(data_root, patient_id, task)
-    if raw is None:
-        print(f"[ERROR] No signal found for patient {patient_id}, task {task}")
-        return
+    FS           = 64       # Hz after downsampling
+    SHOW_SECONDS = 2.0      # seconds to display — zoomed in for clarity
+    SMOOTH_WIN   = 8        # rolling-average window (samples); 0 = no smoothing
 
-    raw_ds = downsample(raw)                       # downsampled only
-    filtered = bandpass_filter(raw_ds)             # bandpass applied
+    # ── Class colours matching reference style ───────────────────────────────
+    CLASS_COLORS = {'HC': '#1F77B4', 'PD': '#D62728', 'DD': '#2CA02C'}
+    CLASS_ALPHA  = {'HC': 0.85,      'PD': 0.85,      'DD': 0.85}
+    CLASS_LW     = {'HC': 1.1,       'PD': 1.1,       'DD': 1.1}
 
-    Fs = 64                                        # Hz after downsampling
-    t = np.arange(len(raw_ds)) / Fs
-    sig_raw = raw_ds[:, channel]
-    sig_filt = filtered[:, channel]
+    # ── Signal loader ────────────────────────────────────────────────────────
+    def _load_wrist(pid, wrist):
+        tmpl = pathlib.Path(data_root) / 'movement' / 'timeseries' / '{N:03d}_{X}_{Y}.txt'
+        path = pathlib.Path(str(tmpl).format(N=pid, X=task, Y=wrist))
+        if not path.exists():
+            return None
+        data = np.loadtxt(path, delimiter=',')
+        if data.shape[1] >= 7:
+            data = data[:, 1:7]
+        elif data.shape[1] > 6:
+            data = data[:, :6]
+        if data.shape[0] > 50:
+            data = data[50:, :]
+        return downsample(data)
 
-    # FFT
-    N = len(sig_raw)
-    freqs = np.fft.rfftfreq(N, d=1 / Fs)
-    fft_raw  = np.abs(np.fft.rfft(sig_raw))  / N
-    fft_filt = np.abs(np.fft.rfft(sig_filt)) / N
+    def _magnitude(sig, cols):
+        return np.sqrt(np.sum(sig[:, cols] ** 2, axis=1))
 
-    # ── Figure layout: 2 rows × 2 cols ──
-    fig = plt.figure(figsize=(18, 9), facecolor='#0F1117')
-    gs  = fig.add_gridspec(2, 2, hspace=0.40, wspace=0.32,
-                           left=0.07, right=0.97, top=0.90, bottom=0.08)
+    def _smooth(arr, win):
+        if win <= 1:
+            return arr
+        return np.convolve(arr, np.ones(win) / win, mode='same')
 
-    ax_raw_time  = fig.add_subplot(gs[0, 0])
-    ax_filt_time = fig.add_subplot(gs[0, 1])
-    ax_raw_freq  = fig.add_subplot(gs[1, 0])
-    ax_filt_freq = fig.add_subplot(gs[1, 1])
+    # ── Find representative patients ─────────────────────────────────────────
+    print("Finding representative patients for bilateral signal plot ...")
+    patient_map = _find_representative_patients(data_root, task)
+
+    # Pre-load signals for every (class, wrist) combo
+    wrist_data = {cls: {} for cls in ['HC', 'PD', 'DD']}
+    for cls in ['HC', 'PD', 'DD']:
+        pid = patient_map.get(cls)
+        if pid is None:
+            continue
+        for wrist in ['LeftWrist', 'RightWrist']:
+            wrist_data[cls][wrist] = _load_wrist(pid, wrist)
+
+    n_show = int(SHOW_SECONDS * FS)
+
+    # ── Figure: 2 rows × 2 cols, square subplots ─────────────────────────────
+    # figsize is chosen so each subplot is approximately square
+    side   = 4.8          # inches per subplot
+    fig, axes = plt.subplots(
+        2, 2,
+        figsize=(side * 2 + 0.6, side * 2 + 0.6),
+        facecolor='white'
+    )
 
     fig.suptitle(
-        f'Bandpass Filter Effect  |  Patient {patient_id:03d}  |  Task: {task}  |  Channel: {CHANNEL_NAMES[channel]}',
-        fontsize=15, color='white', fontweight='bold'
+        f'Wrist IMU Magnitude per Class  —  Task: {task}',
+        fontsize=13, color='#1A1A2E', fontweight='bold', y=1.01
     )
 
-    _style_ax = lambda ax: (
-        ax.__setattr__('_facecolor', '#1A1D24') or
-        ax.set_facecolor('#1A1D24') or
-        ax.tick_params(colors='#8892A4', labelsize=9) or
-        [s.set_color('#2C2F3A') for s in ax.spines.values()]
-    )
+    # Row / col definitions
+    wrists   = ['LeftWrist',  'RightWrist']
+    col_titles = ['Left Wrist', 'Right Wrist']
+    sensor_rows = [
+        ([0, 1, 2], 'Acc Magnitude  √(x²+y²+z²)', 'Acceleration (g)'),
+        ([3, 4, 5], 'Gyro Magnitude  √(x²+y²+z²)', 'Angular Velocity (°/s)'),
+    ]
 
-    for ax in [ax_raw_time, ax_filt_time, ax_raw_freq, ax_filt_freq]:
-        _style_ax(ax)
+    for row_idx, (cols, sensor_title, ylabel) in enumerate(sensor_rows):
+        for col_idx, wrist_key in enumerate(wrists):
+            ax = axes[row_idx, col_idx]
 
-    # ── Time domain ──
-    ax_raw_time.plot(t, sig_raw, color='#E74C3C', linewidth=0.9, alpha=0.9)
-    ax_raw_time.set_title('Raw Signal (no filter)', color='#E74C3C',
-                          fontsize=12, fontweight='bold')
-    ax_raw_time.set_xlabel('Time (s)', color='#8892A4', fontsize=9)
-    ax_raw_time.set_ylabel(CHANNEL_NAMES[channel], color='#8892A4', fontsize=9)
+            # ── Reference-image style: white bg, full-border box ─────────────
+            ax.set_facecolor('white')
+            for spine in ax.spines.values():
+                spine.set_color('black')
+                spine.set_linewidth(0.9)
+            ax.tick_params(colors='black', labelsize=9, direction='in',
+                           top=True, right=True)
+            ax.xaxis.label.set_color('black')
+            ax.yaxis.label.set_color('black')
 
-    ax_filt_time.plot(t, sig_filt, color='#2ECC71', linewidth=0.9, alpha=0.9)
-    ax_filt_time.set_title('Bandpass Filtered  (0.1 – 20 Hz)', color='#2ECC71',
-                           fontsize=12, fontweight='bold')
-    ax_filt_time.set_xlabel('Time (s)', color='#8892A4', fontsize=9)
-    ax_filt_time.set_ylabel(CHANNEL_NAMES[channel], color='#8892A4', fontsize=9)
+            # ── Plot each class ──────────────────────────────────────────────
+            for cls in ['HC', 'PD', 'DD']:
+                sig = wrist_data[cls].get(wrist_key)
+                if sig is None:
+                    continue
+                n   = min(len(sig), n_show)
+                t   = np.arange(n) / float(FS)
+                mag = _smooth(_magnitude(sig[:n], cols), SMOOTH_WIN)
+                ax.plot(
+                    t, mag,
+                    color=CLASS_COLORS[cls],
+                    linewidth=CLASS_LW[cls],
+                    alpha=CLASS_ALPHA[cls],
+                    label=f'{"Control" if cls == "HC" else cls} — {col_titles[col_idx]}'
+                )
 
-    # ── Frequency domain ──
-    freq_mask = freqs <= 30        # show up to 30 Hz
-    ax_raw_freq.plot(freqs[freq_mask], fft_raw[freq_mask],
-                     color='#E74C3C', linewidth=1.2, alpha=0.9)
-    ax_raw_freq.axvspan(0,   0.1, alpha=0.15, color='#F39C12', label='Removed by filter')
-    ax_raw_freq.axvspan(20,  30,  alpha=0.15, color='#F39C12')
-    ax_raw_freq.set_title('Frequency Spectrum — Raw',
-                          color='#E74C3C', fontsize=12, fontweight='bold')
-    ax_raw_freq.set_xlabel('Frequency (Hz)', color='#8892A4', fontsize=9)
-    ax_raw_freq.set_ylabel('Amplitude', color='#8892A4', fontsize=9)
-    ax_raw_freq.axvline(0.1, color='#F39C12', lw=1.4, linestyle='--', label='Filter cutoffs (0.1 / 20 Hz)')
-    ax_raw_freq.axvline(20,  color='#F39C12', lw=1.4, linestyle='--')
-    ax_raw_freq.legend(fontsize=8, facecolor='#262B36', labelcolor='white', framealpha=0.6)
+            # ── Italic bold title inside subplot (top-left, matching reference) ─
+            ax.set_title(
+                f'$\\bf\\it{{{col_titles[col_idx]}}}$',
+                fontsize=11, loc='left', pad=5, color='black'
+            )
 
-    ax_filt_freq.plot(freqs[freq_mask], fft_filt[freq_mask],
-                      color='#2ECC71', linewidth=1.2, alpha=0.9)
-    ax_filt_freq.axvspan(0,  0.1,  alpha=0.15, color='#F39C12')
-    ax_filt_freq.axvspan(20, 30,   alpha=0.15, color='#F39C12')
-    ax_filt_freq.set_title('Frequency Spectrum — Bandpass Filtered',
-                           color='#2ECC71', fontsize=12, fontweight='bold')
-    ax_filt_freq.set_xlabel('Frequency (Hz)', color='#8892A4', fontsize=9)
-    ax_filt_freq.set_ylabel('Amplitude', color='#8892A4', fontsize=9)
-    ax_filt_freq.axvline(0.1, color='#F39C12', lw=1.4, linestyle='--')
-    ax_filt_freq.axvline(20,  color='#F39C12', lw=1.4, linestyle='--')
+            # ── Sensor row label as a right-side annotation ──────────────────
+            ax.text(
+                1.02, 0.5, sensor_title,
+                transform=ax.transAxes,
+                fontsize=8, color='#444444',
+                rotation=270, va='center', ha='left'
+            )
 
-    # Shade the bandpass passband on frequency plots
-    for ax in [ax_raw_freq, ax_filt_freq]:
-        ax.axvspan(0.1, 20, alpha=0.06, color='white', label='Passband')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_ylabel(ylabel, fontsize=9)
+            ax.set_xlim(0, SHOW_SECONDS)
 
-    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='#0F1117')
+            # ── Legend — top-right corner, inside box (reference style) ──────
+            legend_handles = [
+                Line2D([0], [0],
+                       color=CLASS_COLORS[c],
+                       linewidth=1.8,
+                       label=f'{"Control" if c == "HC" else c} — {col_titles[col_idx]}')
+                for c in ['HC', 'PD', 'DD']
+                if wrist_data[c].get(wrist_key) is not None
+            ]
+            ax.legend(
+                handles=legend_handles,
+                loc='upper right',
+                fontsize=8,
+                frameon=True,
+                framealpha=0.9,
+                edgecolor='black',
+                facecolor='white',
+                handlelength=1.8,
+                labelcolor='black'
+            )
+
+            # ── Make subplot square ──────────────────────────────────────────
+            ax.set_aspect('auto')          # time-series can't be pixel-square,
+            # but we force the axes box to be square via set_box_aspect
+            ax.set_box_aspect(1)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
     print(f"[Saved] {save_path}")
     plt.show()
     return fig
 
+# ── Plot 5: DHWT Window Distribution (Standard vs DHWT per class) ─────────────
 
+def plot_dhwt_distribution(data_root: str,
+                           window_size: int = 256,
+                           save_path: str = 'eda_dhwt_distribution.png'):
+    """
+    Single grouped bar chart:
+      X-axis  : Standard  |  DHWT
+      Bar groups : HC (green) / PD (blue) / DD (red)  — shown as legend
+    """
+    tasks = ["CrossArms", "DrinkGlas", "Entrainment", "HoldWeight", "LiftHold",
+             "PointFinger", "Relaxed", "StretchHold", "TouchIndex", "TouchNose"]
+    patients_tmpl = pathlib.Path(data_root) / 'patients' / 'patient_{p:03d}.json'
+    ts_tmpl       = pathlib.Path(data_root) / 'movement' / 'timeseries' / '{N:03d}_{X}_{Y}.txt'
+
+    OVERLAPS_DHWT = {'HC': 0.70, 'PD': 0.00, 'DD': 0.65}
+    step_std = window_size  # overlap = 0 → step = window_size
+
+    raw_counts = {
+        'Standard': {'HC': 0, 'PD': 0, 'DD': 0},
+        'DHWT':     {'HC': 0, 'PD': 0, 'DD': 0},
+    }
+
+    print("Computing window counts for DHWT distribution plot ...")
+    for pid in tqdm(range(1, 470), desc="Scanning patients"):
+        ppath = pathlib.Path(str(patients_tmpl).format(p=pid))
+        if not ppath.exists():
+            continue
+        try:
+            with open(ppath, 'r') as f:
+                condition = json.load(f).get('condition', '')
+        except Exception:
+            continue
+
+        cls = 'HC' if condition == 'Healthy' else ('PD' if 'Parkinson' in condition else 'DD')
+        step_dhwt = max(1, int(window_size * (1 - OVERLAPS_DHWT[cls])))
+
+        for task in tasks:
+            path = pathlib.Path(str(ts_tmpl).format(N=pid, X=task, Y='LeftWrist'))
+            if not path.exists():
+                continue
+            try:
+                n_raw = np.loadtxt(path, delimiter=',').shape[0]
+                n_raw = max(0, n_raw - 50)
+                n_ds  = int(n_raw * 64 / 100)
+                raw_counts['Standard'][cls] += max(0, (n_ds - window_size) // step_std  + 1)
+                raw_counts['DHWT'][cls]     += max(0, (n_ds - window_size) // step_dhwt + 1)
+            except Exception:
+                continue
+
+    # Normalise to percentages
+    pct = {}
+    for scheme in ['Standard', 'DHWT']:
+        total = sum(raw_counts[scheme].values()) or 1
+        pct[scheme] = {c: raw_counts[scheme][c] / total * 100 for c in ['HC', 'PD', 'DD']}
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(7, 5), facecolor='white')
+    ax.set_facecolor('white')
+    for spine in ax.spines.values():
+        spine.set_color('black')
+        spine.set_linewidth(0.9)
+    ax.tick_params(colors='black', labelsize=11, direction='in', top=True, right=True)
+
+    classes  = ['HC', 'PD', 'DD']
+    schemes  = ['Standard', 'DHWT']
+    n_groups = len(schemes)          # 2
+    n_bars   = len(classes)          # 3
+    bar_w    = 0.22
+    offsets  = np.array([-1, 0, 1]) * bar_w   # centres for HC / PD / DD within each group
+
+    x_pos = np.arange(n_groups)      # 0 = Standard, 1 = DHWT
+
+    bar_w   = 0.22
+    offsets = np.array([-1, 0, 1]) * bar_w   # HC / PD / DD side by side
+
+    for cls_idx, cls in enumerate(classes):
+        vals  = [pct[s][cls] for s in schemes]
+        color = CLASS_INFO[cls]['color']
+        b = ax.bar(
+            x_pos + offsets[cls_idx],
+            vals,
+            width=bar_w,
+            color=color,
+            edgecolor='white',
+            linewidth=1.2,
+            label=CLASS_INFO[cls]['label'],
+            zorder=3
+        )
+
+        # Percentage label above each bar
+        for rect, val in zip(b, vals):
+            ax.text(
+                rect.get_x() + rect.get_width() / 2,
+                rect.get_height() + 0.6,
+                f'{val:.1f}%',
+                ha='center', va='bottom',
+                fontsize=9, fontweight='bold', color='#1A1A2E'
+            )
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(['Standard', 'DHWT'], fontsize=12, fontweight='bold', color='black')
+    ax.set_ylabel('Windows (%)', fontsize=10, color='black')
+    ax.set_title(
+        'Class Window Distribution: Standard Windowing vs DHWT',
+        fontsize=12, color='#1A1A2E', fontweight='bold', pad=10
+    )
+
+    max_val = max(pct[s][c] for s in schemes for c in classes)
+    ax.set_ylim(0, max_val * 1.3)
+    ax.yaxis.grid(True, color='#E0E0E0', linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
+
+    ax.legend(
+        fontsize=9,
+        frameon=True,
+        framealpha=0.9,
+        edgecolor='black',
+        facecolor='white',
+        loc='upper right'
+    )
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"[Saved] {save_path}")
+    plt.show()
+    return fig
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point – run all EDA plots
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    DATA_ROOT = '/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0'
+    DATA_ROOT = '/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0'
     TASK      = 'Relaxed'          # task to pull demo signals from
     OUT_DIR   = '.'                # where to save the plots
 
@@ -742,25 +927,21 @@ if __name__ == '__main__':
     )
 
     print("\n" + "=" * 60)
-    print(" EDA Plot 2 — Overlapping Windows Visualisation")
+    print(" EDA Plot 4 — Bilateral IMU Signals (HC / PD / DD)")
     print("=" * 60)
-    plot_overlapping_windows(
+    plot_bilateral_imu_signals(
         data_root=DATA_ROOT,
         task=TASK,
-        window_size=256,
-        n_windows_shown=7,
-        channel=0,                 # Acc X
-        save_path=os.path.join(OUT_DIR, 'eda_overlapping_windows.png')
+        save_path=os.path.join(OUT_DIR, 'eda_bilateral_signals.png')
     )
 
     print("\n" + "=" * 60)
-    print(" EDA Plot 3 — Bandpass Filter Comparison")
+    print(" EDA Plot 5 — DHWT Window Distribution")
     print("=" * 60)
-    plot_bandpass_comparison(
+    plot_dhwt_distribution(
         data_root=DATA_ROOT,
-        task=TASK,
-        channel=0,                 # Acc X
-        save_path=os.path.join(OUT_DIR, 'eda_bandpass_comparison.png')
+        window_size=256,
+        save_path=os.path.join(OUT_DIR, 'eda_dhwt_distribution.png')
     )
 
     print("\n✓ All EDA plots saved.")
