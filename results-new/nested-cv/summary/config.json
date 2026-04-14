@@ -1,0 +1,20 @@
+{
+  "data_root": "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+  "apply_downsampling": true,
+  "apply_bandpass_filter": true,
+  "outer_folds": 5,
+  "inner_folds": 3,
+  "n_trials": 20,
+  "optuna_epochs": 20,
+  "final_epochs": 80,
+  "input_dim": 6,
+  "timestep": 256,
+  "num_classes": 2,
+  "num_workers": 4,
+  "pin_memory": true,
+  "save_metrics": true,
+  "create_plots": true,
+  "patience": 10,
+  "checkpoint_interval": 5,
+  "resume_from": "/kaggle/input/notebooks/meherunnesa0312/parkinsons-optuna4"
+}

@@ -905,6 +905,221 @@ def plot_dhwt_distribution(data_root: str,
     print(f"[Saved] {save_path}")
     plt.show()
     return fig
+def plot_paper_figure(data_root: str,
+                      task: str = 'HoldWeight',
+                      channel: int = 0,
+                      save_path: str = 'paper_figure.png'):
+    """
+    Single paper-ready figure with three panels:
+      [Left Wrist signal] | [Right Wrist signal] | [DHWT distribution]
+
+    Styled for publication: white background, tight layout, no clutter.
+    """
+    import json
+    from matplotlib.lines import Line2D
+    from matplotlib.gridspec import GridSpec
+
+    FS           = 64
+    SHOW_SECONDS = 2.0
+    SMOOTH_WIN   = 8
+
+    CLASS_COLORS = {'HC': '#1F77B4', 'PD': '#D62728', 'DD': '#2CA02C'}
+    CLASS_LABELS = {'HC': 'Control', 'PD': 'PD', 'DD': 'DD'}
+
+    OVERLAPS_DHWT = {'HC': 0.70, 'PD': 0.00, 'DD': 0.65}
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+    def _load_wrist(pid, wrist):
+        tmpl = pathlib.Path(data_root) / 'movement' / 'timeseries' / '{N:03d}_{X}_{Y}.txt'
+        path = pathlib.Path(str(tmpl).format(N=pid, X=task, Y=wrist))
+        if not path.exists():
+            return None
+        data = np.loadtxt(path, delimiter=',')
+        if data.shape[1] >= 7:
+            data = data[:, 1:7]
+        elif data.shape[1] > 6:
+            data = data[:, :6]
+        if data.shape[0] > 50:
+            data = data[50:, :]
+        return downsample(data)
+
+    def _magnitude(sig, cols):
+        return np.sqrt(np.sum(sig[:, cols] ** 2, axis=1))
+
+    def _smooth(arr, win):
+        if win <= 1:
+            return arr
+        return np.convolve(arr, np.ones(win) / win, mode='same')
+
+    def _style_ax(ax):
+        ax.set_facecolor('white')
+        for spine in ax.spines.values():
+            spine.set_color('black')
+            spine.set_linewidth(0.8)
+        ax.tick_params(colors='black', labelsize=7, direction='in',
+                       top=True, right=True)
+
+    # ── Load signals ─────────────────────────────────────────────────────────
+    print("Finding representative patients ...")
+    patient_map = _find_representative_patients(data_root, task)
+
+    wrist_data = {cls: {} for cls in ['HC', 'PD', 'DD']}
+    for cls in ['HC', 'PD', 'DD']:
+        pid = patient_map.get(cls)
+        if pid is None:
+            continue
+        for wrist in ['LeftWrist', 'RightWrist']:
+            wrist_data[cls][wrist] = _load_wrist(pid, wrist)
+
+    n_show = int(SHOW_SECONDS * FS)
+
+    # ── Compute DHWT window counts ────────────────────────────────────────────
+    tasks_all = ["CrossArms", "DrinkGlas", "Entrainment", "HoldWeight", "LiftHold",
+                 "PointFinger", "Relaxed", "StretchHold", "TouchIndex", "TouchNose"]
+    patients_tmpl = pathlib.Path(data_root) / 'patients' / 'patient_{p:03d}.json'
+    ts_tmpl       = pathlib.Path(data_root) / 'movement' / 'timeseries' / '{N:03d}_{X}_{Y}.txt'
+    window_size   = 256
+    step_std      = window_size
+
+    raw_counts = {
+        'Standard': {'HC': 0, 'PD': 0, 'DD': 0},
+        'DHWT':     {'HC': 0, 'PD': 0, 'DD': 0},
+    }
+
+    print("Computing window counts ...")
+    for pid in tqdm(range(1, 470), desc="Scanning patients"):
+        ppath = pathlib.Path(str(patients_tmpl).format(p=pid))
+        if not ppath.exists():
+            continue
+        try:
+            with open(ppath, 'r') as f:
+                condition = json.load(f).get('condition', '')
+        except Exception:
+            continue
+        cls = 'HC' if condition == 'Healthy' else ('PD' if 'Parkinson' in condition else 'DD')
+        step_dhwt = max(1, int(window_size * (1 - OVERLAPS_DHWT[cls])))
+        for t_name in tasks_all:
+            path = pathlib.Path(str(ts_tmpl).format(N=pid, X=t_name, Y='LeftWrist'))
+            if not path.exists():
+                continue
+            try:
+                n_raw = np.loadtxt(path, delimiter=',').shape[0]
+                n_raw = max(0, n_raw - 50)
+                n_ds  = int(n_raw * 64 / 100)
+                raw_counts['Standard'][cls] += max(0, (n_ds - window_size) // step_std  + 1)
+                raw_counts['DHWT'][cls]     += max(0, (n_ds - window_size) // step_dhwt + 1)
+            except Exception:
+                continue
+
+    pct = {}
+    for scheme in ['Standard', 'DHWT']:
+        total = sum(raw_counts[scheme].values()) or 1
+        pct[scheme] = {c: raw_counts[scheme][c] / total * 100 for c in ['HC', 'PD', 'DD']}
+
+    # ── Figure layout ─────────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(11, 3.6), facecolor='white')
+    gs  = GridSpec(1, 3, figure=fig,
+                   left=0.07, right=0.97,
+                   top=0.88, bottom=0.16,
+                   wspace=0.38)
+
+    ax_left  = fig.add_subplot(gs[0, 0])
+    ax_right = fig.add_subplot(gs[0, 1])
+    ax_bar   = fig.add_subplot(gs[0, 2])
+
+    # ── Signal panels ─────────────────────────────────────────────────────────
+    wrist_axes = [('LeftWrist', ax_left, 'LeftWrist'), ('RightWrist', ax_right, 'RightWrist')]
+
+    for wrist_key, ax, wrist_label in wrist_axes:
+        _style_ax(ax)
+        for cls in ['HC', 'PD', 'DD']:
+            sig = wrist_data[cls].get(wrist_key)
+            if sig is None:
+                continue
+            n   = min(len(sig), n_show)
+            t   = np.arange(n) / float(FS)
+            mag = _smooth(_magnitude(sig[:n], [0, 1, 2]), SMOOTH_WIN)
+            ax.plot(t, mag,
+                    color=CLASS_COLORS[cls],
+                    linewidth=1.0,
+                    alpha=0.88,
+                    label=CLASS_LABELS[cls])
+
+        ax.set_title(f'$\\it{{{wrist_label}}}$', fontsize=9,
+                     fontweight='bold', loc='center', pad=4)
+        ax.set_xlabel('Time (s)', fontsize=7.5)
+        ax.set_ylabel('Acceleration (g)', fontsize=7.5)
+        ax.set_xlim(0, SHOW_SECONDS)
+        ax.xaxis.set_major_locator(plt.MultipleLocator(0.5))
+        ax.set_box_aspect(1)
+
+        # Legend top-right inside the box
+        legend_handles = [
+            Line2D([0], [0], color=CLASS_COLORS[c], linewidth=1.6,
+                   label=f'{CLASS_LABELS[c]} — {wrist_label}')
+            for c in ['HC', 'PD', 'DD']
+        ]
+        ax.legend(handles=legend_handles, loc='upper right', fontsize=6.5,
+                  frameon=True, framealpha=0.9, edgecolor='black',
+                  facecolor='white', handlelength=1.5)
+
+    # ── Distribution bar panel ────────────────────────────────────────────────
+    _style_ax(ax_bar)
+
+    classes  = ['HC', 'PD', 'DD']
+    schemes  = ['Standard', 'DHWT']
+    x_pos    = np.arange(len(schemes))
+    bar_w    = 0.22
+    offsets  = np.array([-1, 0, 1]) * bar_w
+
+    for cls_idx, cls in enumerate(classes):
+        vals  = [pct[s][cls] for s in schemes]
+        color = CLASS_COLORS[cls]
+        b = ax_bar.bar(
+            x_pos + offsets[cls_idx],
+            vals,
+            width=bar_w,
+            color=color,
+            edgecolor='white',
+            linewidth=1.0,
+            label=CLASS_LABELS[cls],
+            zorder=3
+        )
+        for rect, val in zip(b, vals):
+            ax_bar.text(
+                rect.get_x() + rect.get_width() / 2,
+                rect.get_height() + 0.8,
+                f'{val:.1f}%',
+                ha='center', va='bottom',
+                fontsize=6.5, fontweight='bold', color='#1A1A2E'
+            )
+
+    ax_bar.set_xticks(x_pos)
+    ax_bar.set_xticklabels(['Standard', 'DHWT'], fontsize=8,
+                           fontweight='bold', color='black')
+    ax_bar.set_ylabel('Windows (%)', fontsize=7.5)
+    ax_bar.set_title('Class Window Distribution:\nStandard vs DHWT',
+                     fontsize=8, color='#1A1A2E', pad=4)
+    max_val = max(pct[s][c] for s in schemes for c in classes)
+    ax_bar.set_ylim(0, max_val * 1.35)
+    ax_bar.yaxis.grid(True, color='#E0E0E0', linewidth=0.6, zorder=0)
+    ax_bar.set_axisbelow(True)
+    ax_bar.set_box_aspect(1)
+    ax_bar.legend(fontsize=6.5, frameon=True, framealpha=0.9,
+                  edgecolor='black', facecolor='white',
+                  loc='upper right', handlelength=1.2)
+
+    # ── Shared caption-style super-title ─────────────────────────────────────
+    fig.suptitle(
+        f'IMU sensor data performing the $\\it{{{task}}}$ task  |  '
+        f'Acc magnitude — channel: {CHANNEL_NAMES[channel]}',
+        fontsize=8.5, color='#1A1A2E', y=0.98
+    )
+
+    plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
+    print(f"[Saved] {save_path}")
+    plt.show()
+    return fig
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point – run all EDA plots
 # ─────────────────────────────────────────────────────────────────────────────
@@ -934,6 +1149,11 @@ if __name__ == '__main__':
         task=TASK,
         save_path=os.path.join(OUT_DIR, 'eda_bilateral_signals.png')
     )
+
+    plot_paper_figure(data_root=DATA_ROOT,
+                      task=TASK,
+                      channel=0,
+                      save_path=os.path.join(OUT_DIR, 'paper_figure.png'))
 
     print("\n" + "=" * 60)
     print(" EDA Plot 5 — DHWT Window Distribution")

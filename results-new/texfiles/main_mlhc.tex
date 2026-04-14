@@ -1,86 +1,49 @@
 %% ─────────────────────────────────────────────────────────────────
 %% MLHC 2026 — Research Track Submission
-%% Template class: jmlr with pmlr option (PMLR / Proceedings of
-%% Machine Learning Research). Download the official style files
-%% from: https://www.mlforhc.org/s/MLHC2026-ResearchTrack-Template.zip
-%% and place jmlr.cls (and any auxiliary .sty files) in this directory.
-%%
-%% KEY FORMAT RULES (from MLHC 2026 CfP):
-%%   • 11-point Times font  (enforced by jmlr.cls)
-%%   • Single column        (do NOT use twocolumn option)
-%%   • 10–15 pages          (excluding references and appendix)
-%%   • Fully anonymised     (no author names, institution, or links)
-%%   • Mandatory section:   "Generalizable Insights" in Introduction
-%%   • Submit via OpenReview by April 17, 2026
 %% ─────────────────────────────────────────────────────────────────
 \documentclass[pmlr]{jmlr}
 
 % ─── Additional packages ─────────────────────────────────────────
-% NOTE: jmlr.cls auto-loads: amsmath, amssymb, natbib, graphicx,
-%       url, algorithm2e. Only add what is not already loaded.
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{array}
 \usepackage{xcolor}
 \usepackage{hyperref}
+\usepackage{float}
 \hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
 
-% ─── PMLR metadata (leave volume/year as placeholders for submission)
+% ─── PMLR metadata
 \jmlrvolume{}
 \jmlryear{2026}
 \jmlrworkshop{Machine Learning for Healthcare (MLHC) 2026}
 
-% ─── Title (short title appears in header) ───────────────────────
+% ─── Title ───────────────────────────────────────────────────────
 \title[PD Detection from Bilateral IMU via Cross-Attention Transformers]{%
   Parkinson's Disease Detection from Bilateral Wrist-Worn Smartwatch
   IMU Data Using Dual-Channel Cross-Attention Transformers}
 
 % ─── Authors — ANONYMISED FOR SUBMISSION ─────────────────────────
-% Replace the block below with your real author block in the
-% camera-ready version only. Do NOT de-anonymise before acceptance.
 \author{%
   \Name{Anonymous Author(s)} \Email{anonymous@institution.edu}\\
   \addr Anonymous Institution
 }
 
-% ─── Editor (leave blank for submission) ─────────────────────────
 \editor{}
 
 % ═════════════════════════════════════════════════════════════════
 \begin{document}
+\raggedbottom
 \maketitle
 
 % ─── Abstract ────────────────────────────────────────────────────
 \begin{abstract}
-Parkinson's Disease (PD) is a chronic neurodegenerative disorder
-characterised by motor symptoms including tremor, bradykinesia,
-postural instability, and freezing of gait (FoG). Clinical diagnosis
-currently relies on evaluation by a physician or specialist, which is
-time-consuming, subject to inter-rater variability, and inaccessible
-in many settings. Advanced wearable sensors offer a promising
-alternative by enabling continuous, objective monitoring of motor
-function in daily life. We propose a Dual-Channel Cross-Attention
-Transformer that processes bilateral wrist-worn IMU signals from the
-PADS dataset (469 participants: 291 PD, 79 HC, 99 DD) to classify PD
-against both Healthy Controls (HC) and Differential Diagnosis (DD)
-conditions. Rather than a single three-class objective, we decompose
-the problem into two focused binary classification heads, enabling the
-model to learn the HC/PD and PD/DD decision boundaries independently.
-Patient-level stratified 5-fold cross-validation is applied throughout
-to obtain less biased estimates of true out-of-sample performance. The
-base model achieves a combined mean accuracy of $92.83\%$ across
-folds. We further demonstrate that self-supervised pre-training with
-contrastive infoNCE loss reaches $91.02\%$ combined accuracy with only
-$20\%$ of labelled data, highlighting the potential of label-efficient
-learning for clinical applications. The optimised model achieves a
-mean inference time of $48.32$~ms per window on a Raspberry Pi CPU,
-confirming viability for real-time edge deployment on smartwatch
-hardware. Early and continuous monitoring of PD motor symptoms enabled
-by this framework could support timely clinical intervention and reduce
-reliance on infrequent specialist visits.
+Parkinson's Disease (PD) is a chronic neurodegenerative disorder. It consists several motor symptoms such as tremor, bradykinesia, postural instability, and freezing of gait (FoG). PD is currently diagnosed clinically through physical exam by health-care professionals , which can be time consuming and highly subjective. Wearable IMU sensors provides a promising gateway by allowing continuous monitoring of PD severity. 
+
+We propose a Self-Supervised Bilateral Cross-Attention Encoder that processes wrist-worn IMU signals from the PADS dataset including 469 participants recordings containing three patient groups Parkinson's Disease(PD),Healthy Controls(HC) and Differential Diagnosis(DD). We break the detection task down into two focused binary classification tasks. The model learns two different objectives separately. 
+
+The patient-level stratified 5-fold cross-validation, we have achieved a combined mean accuracy of $90.08$\% ($93.12$\% for HC~vs.~PD and $87.04$\% for PD~vs.~DD). The results emphasize the clinical challenge of distinguishing Parkinson's from other neurodegenerative diseases. Self-supervised representation learning using contrastive infoNCE loss gained  combined accuracy of 91.02\% using only 20\% of labeled data in a held-out fold. This demonstrates the effectiveness our method in transfer learning for clinical use with minimal labels.  The real-time applicability was tested by deploying the optimized model operating with a mean inference time of 48.32 ms per window on a Raspberry Pi CPU. This study can contribute in continuous monitoring of PD motor symptoms could help support timely clinical intervention and lessen the need for rare specialist visits.
 \end{abstract}
 
-% ─── Keywords ────────────────────────────────────────────────────
 \begin{keywords}
 Parkinson's Disease, IMU, wearable sensing, cross-attention transformer,
 self-supervised learning, infoNCE, nested cross-validation, edge deployment
@@ -91,223 +54,74 @@ self-supervised learning, infoNCE, nested cross-validation, edge deployment
 \section{Introduction}
 \label{sec:intro}
 % ═════════════════════════════════════════════════════════════════
-% size of the introduction should be around <=2 pages we can still add text equivalent to the size of generalized text, we can extend the key contributions,i don't want generalization para, it seems redaundent with key contribution
 
-%these parts are written by me 
-Parkinson's is a chronic neurodegenarative disorder that affects 10 million people around the world.
-Early symptoms of Parkinson's involve various moto diseases such as  resting tremor, bradykinesia, rigidity,
-postural instability, and freezing of gait (FoG). Parkinson's though irreversible constant monitoring and treatment plan can help delay disease progression and increase life expectancy as well as increase the quality of life of a Parkinson's patient.
+%the introduction section has been humanized. 
+Parkinson's Disease (PD) is a progressive  neurodegenerative movement disorder that afflicts $10$~million individuals globally\citep{dorsey2018}. The disease is the result of the progressive degeneration of the dopaminergic system in the brain; Some leading symptoms of PD involves movement disorders, tremor, bradykinesia, rigidity postural instability and freezing of gait~(FoG). Parkinson’s disease (PD) can impact daily activities like walking, speech and other basic functioning.
 
-Currently parkinson's disease diagnosis require direct involvement of health care professionals and clinical rating scale (e.g., UPDRS) which can be inadequate and inherently subjective.
+As diseases progress, PD may lead to motor impairments as severe as balance dysfunction and dysphagia and cognitive deficits such as dementia and psychosis. although PD is uncurable, timely clinical intervention and regular check-ups can slow the disease's advancement and correlate with increased life-span ~\citep{bloem2021}.
 
-% this para is important, we are not noly doing HC vs PD but PD vs DD also 
-Parkinson's shares common motor symptoms with various neurological disorders such as Essential Tremor, Multiple System Atrophy, progressive supranuclear palsy etc, making differentiating
-parkinson's disease can be challenging due to it's underlying similarity in motor symptoms, which can often delay the treatment procedure until the severity increases. Distinguishing Parkinson's disease(PD) from differetial diagnosis (DD) due to similar motor patterns remains a clinically a challenging task.
+Currently, PD diagnosis and monitoring requires active participation of healthcare professionals in addition to utilization of standard clinical scoring systems such as UNIFIED PARKINSON'S DISEASE RATING SCALE (UPDRS), Hoehn in Yard rating. These diagnostic approaches are subjective and constrained by inter-rater variability, and requires routined assessments. PD has overlapping motor symptoms with other neurological disorders which is group together as differential diagnoses~(DD): essential tremor, atypical Parkinsonism, multiple system atrophy, and progressive supranuclear palsy. DD can present motor patterns similar to PD, complicating diagnosis, especially at early stages and resulting in delayed treatment.
+Only a limited number of studies focus on developing a system capable of detecting motor abnormalities and differentiating PD from differential diagnosis. The incorporation of wearable sensors into edge devices such as smartwatches provides a unique opportunity to assess the physiological and motor activity of patients in their natural environment without affecting their daily behavior [ 6, 7 ]. Wearable devices like smartwatches with embedded accelerators can capture the Inertial Measurement Unit (IMU) signals related to PD\@ motor symptoms.However, inferring meaningful patterns of such medical time series data is fundamentally challenging since noise and distortions disrupt from natural environmental variables. 
+On the other hand, motor asymmetry is a well-known feature of PD and symptoms often onset and progress more severely on one side of body, by the application of bilateral smartwatches used on wrists this asymmetry may be captured without any clinical setup.
 
-This creates necessity for a system that can detect any abnormalities as well as contrast parkinson's with other differential diagnosis.  %have to make line line longer
 
-The application of advanced wearable sensors in personal devices (e.g. smartwatch,smartphone) has grown rapidly. These wearable sensors can record and monitor physiological and movement data. The smartwatch sensor can record Inertial Measurement Units (IMU) signal which can be  valuable in detecting motor symptoms related to parkinson's disease. However mining meaningful patterns and trends is inherently difficult due to the nature of sensor data,which can often contain noise and signal distortions due to environmental variables.
+Recently, machine learning techniques have achieved promising results in Human Activity Recognition (HAR) tasks such as the PD recognition task. While sequential networks like LSTMs capture temporal dependencies in the signals generated from sensors, Transformer encoders with attention mechanism perform well when learning for patterns that have long-range temporal dependencies~\citep{vaswani2017}. Self-supervised contrastive representation learning is a powerful paradigm for learning from unlabelled data, which may be transferable to clinical environments where obtaining annotated data is limited by expert assessment and the cost of annotation. Nonetheless, real-time implementations of these systems are largely unexplored because of increased computation costs and the small amount of properly annotated data available in neurological diseases like PD which exhibit a high variability in patient symptoms.
+In this study, we present a Self-Supervised Bilateral Cross-Attention framework for detecting Parkinson's disease using wrist-worn IMU data. The key contributions are:
 
-Parkinson's can show asymmetry in motor symptoms, smartwatches can be worn in both wrist and measure the motor signal without affecting the daily activity of the patient. The goal is to develop a method that can capture the underlying motor asymmetry of parkinson's disease.  %till this point 
-
-Deep learning approaches have shown strong performance in Human Activity Recognition (HAR) and medical time series classification. Sequential models such as LSTMs capture temporal dependencies in
-sensor signals, while Transformer architectures with self-attention mechanisms are well suited to modelling long-range temporal patterns. In parallel, self-supervised contrastive representation learning has emerged as a powerful learning paradigm from unlabelled data, which is especially relevant in clinical settings where labelled data is coarse.
-
-This study implements a cross-attention based Transformer framework for Parkinson’s disease detection using bilateral wrist-worn IMU data. The key contributions are: 
 \begin{itemize}
-  \item A bilateral cross-attention architecture that explicitly models the motor asymmetry between the left and right wrists, which is a clinically established characteristic of PD.
-  \item A hierarchical binary classification strategy by decomposing the three-group problem into two focused tasks (HC vs.~PD and PD vs.~DD), resulting in higher accuracy in separating parkinson's from other motor diseases.
-  \item A self-supervised pre-training stage using infoNCE contrastive loss that achieves label-efficient transfer, reaching saturation with as few as $20\%$ of available labels.
-  \item Deployment of the optimised model on a Raspberry Pi CPU, demonstrating real-time inference at $48.32$~ms per window and validating feasibility for edge deployment on smartwatch hardware.
+
+\item A bilateral cross-attention architecture that captures the motor asymmetry between left and right wrists, an established clinical feature of PD \@.
+
+\item A hierarchical classification approach to decompose the three class classification problem into two binary classification subtasks (HCvs.PD and PDvs.DD) yielding $2.71$~pp combined accuracy gain over the three class classifier.
+
+\item DHWT (Differential Hopping Windowing Technique), which establishes variable length overlapping throughout each individual class and relieves the source of underlying class imbalance from the dataset.
+
+\item A self-supervised pre-training strategy for label efficient learning that achieves as close as $91.02\%$ combined accuracy with as few as $20\%$ labels.
+
+\item Deploying the model on Raspberry Pi CPU and with minimum preprocessing attaining the inference rate of $48.32$~ms per window establishing feasibility of deployment on edge devices.
 
 \end{itemize}
 
+\paragraph{Generalizable Insights for Healthcare.}
 
-
-% Parkinson's Disease is a chronic neurodegenerative disorder affecting
-% over 10 million people worldwide~\citep{dorsey2018}. It is characterised by
-% progressive impairment of the dopaminergic system, leading to hallmark
-% motor symptoms including resting tremor, bradykinesia, rigidity,
-% postural instability, and freezing of gait (FoG). FoG episodes can
-% persist for a few seconds or last several minutes, significantly
-% increasing fall risk and reducing quality of life. Currently, PD is
-% measured and analysed by a physician or specialist through subjective
-% clinical rating scales such as the Unified Parkinson's Disease Rating
-% Scale (UPDRS), which are expensive, infrequent, and inherently subject
-% to inter-rater variability.
-
-% Advanced wearable sensors, particularly Inertial Measurement Units
-% (IMU) embedded in smartwatches, present a compelling opportunity to
-% address these challenges. Smartwatch-based systems can capture
-% continuous, objective motor data during daily activities without
-% disrupting the patient's routine. However, mining meaningful patterns
-% and trends from such medical time series data is inherently
-% challenging: signals are noisy, high-dimensional, and reflect subtle
-% motor irregularities that must be disentangled from normal movement.
-% Moreover, because of underlying similarity in motor patterns,
-% distinguishing PD from Differential Diagnosis (DD) conditions---other
-% neurodegenerative disorders that produce Parkinson's-like
-% symptoms---remains a significant clinical and computational challenge.
-
-% Deep learning approaches have shown strong performance in Human
-% Activity Recognition (HAR) and medical time series classification.
-% Sequential models such as LSTMs capture temporal dependencies in
-% sensor signals, while Transformer architectures with self-attention
-% mechanisms are well suited to modelling long-range temporal patterns.
-% In parallel, self-supervised contrastive representation learning has
-% emerged as a powerful paradigm for learning from unlabelled data,
-% which is especially relevant in clinical settings where obtaining true
-% labels requires expert annotation and is therefore costly.
-
-% We propose a Dual-Channel Cross-Attention Transformer framework for PD
-% detection from bilateral wrist-worn IMU data. The key contributions are:
-% \begin{itemize}
-%   \item A dual-stream cross-attention architecture that explicitly
-%         models the motor asymmetry between the left and right wrists,
-%         which is a clinically established characteristic of PD.
-%   \item A hierarchical binary classification strategy that decomposes
-%         the three-group problem into two focused tasks (HC vs.~PD and
-%         PD vs.~DD), yielding a $4.48$~pp improvement in combined
-%         accuracy over a three-class baseline.
-%   \item A self-supervised pre-training stage using infoNCE contrastive
-%         loss that achieves label-efficient transfer, reaching
-%         competitive performance with as few as $20\%$ of available
-%         labels.
-%   \item Deployment of the optimised model on a Raspberry Pi CPU,
-%         demonstrating real-time inference at $48.32$~ms per window and
-%         validating feasibility for edge deployment on smartwatch
-%         hardware.
-% \end{itemize}
-
-% % ─────────────────────────────────────────────────────────────────
-% % MANDATORY FOR MLHC: Generalizable Insights
-% % Every MLHC Research Track paper MUST include this subsection
-% % in the Introduction. Describe what insights from your work
-% % generalise BEYOND this specific task/dataset.
-% % ─────────────────────────────────────────────────────────────────
-% \subsection*{Generalizable Insights}
-% \label{sec:insights}
-
-% This work provides three generalizable insights for the machine
-% learning for healthcare community:
-
-% \begin{enumerate}
-%   \item \textbf{Bilateral sensing via cross-attention is clinically
-%         motivated and broadly applicable.} Many neurodegenerative and
-%         musculoskeletal conditions exhibit lateralised motor
-%         asymmetry. The dual-stream cross-attention design used here
-%         to model contralateral wrist relationships is directly
-%         applicable to any clinical wearable sensing scenario where
-%         bilateral signals carry differential diagnostic information.
-
-%   \item \textbf{Hierarchical decomposition of a multi-class clinical
-%         problem improves performance when class boundaries are
-%         qualitatively different.} The $4.48$~pp gain from
-%         decomposing HC/PD/DD into two focused binary tasks suggests
-%         that this strategy generalises to other clinical settings
-%         with heterogeneous class separability, such as staging of
-%         diseases or distinguishing comorbid conditions.
-
-%   \item \textbf{Self-supervised pre-training on clinical IMU data
-%         substantially reduces label requirements.} With only $20\%$
-%         of labelled data, performance exceeds $91\%$, and further
-%         labelling yields diminishing returns. This finding
-%         generalises to any clinical wearable scenario where expert
-%         annotation is scarce---a pervasive bottleneck in medical
-%         machine learning.
-% \end{enumerate}  
+The work yields three insights that generalize well beyond PD detection.
+Firstly, Hierarchical binary decomposition beats multi-class first Many subproblems of a single classification, when clinically decision boundaries---a pattern that emerges whenever one has to diagnose a disease from healthy controls \emph{and} from phenotypically similar conditions. 
+The second reason is that self-supervised pre-training with the raw IMU signals saturates quickly with little supervised data (${\sim}20\%$) than this suggests that the annotation bottleneck in wearable clinical studies can be significantly denoised by representation learning on unlabelled audio. 
+In the third place, the cross-attention mechanism provides a general-purpose asymmetry that are derived from bilateral or contralateral asymmetry from Sensors and descriptors, wearables for any condition withogeneous between subjects. lateralised motor symptoms.
 
 The remainder of this paper is organised as follows.
 Section~\ref{sec:related} reviews related work.
 Section~\ref{sec:dataset} describes the PADS dataset.
 Section~\ref{sec:method} details the proposed methodology.
 Section~\ref{sec:experiments} presents experimental results and
-ablation studies. Section~\ref{sec:discussion} discusses findings and
-limitations. Section~\ref{sec:conclusion} concludes.
+ablation studies.
+Section~\ref{sec:discussion} discusses findings and limitations.
+Section~\ref{sec:conclusion} concludes.
 
 
 % ═════════════════════════════════════════════════════════════════
 \section{Related Work}
 \label{sec:related}
 % ═════════════════════════════════════════════════════════════════
+Objective of PD detection has been extensively investigated with wearable IMU sensors assessment.
 
-\subsection{IMU-Based Parkinson's Disease Detection}
+Most of the earlier works relied on handcrafted features derived from accelerometer signals,to determine tremor and bradykinesia~\citep{patel2009}; recent work has focused on deep learning methods which showed competitive results without any manual feature engineering.~\cite{Jahanshahi et al. 2020}.
 
-Wearable IMU sensors have been widely explored for objective PD
-assessment. Early work focused on handcrafted features extracted from
-accelerometer signals to detect tremor and bradykinesia~\citep{patel2009}.
-More recently, deep learning approaches have demonstrated competitive
-performance without manual feature engineering. Convolutional Neural
-Networks (CNNs) have been applied to IMU time series for gait and
-tremor classification, and recurrent architectures such as LSTMs have
-been used to capture sequential dependencies in motor signals.
-Systematic reviews of deep learning with wearable sensors for
-PD~\citep{sigcha2020} highlight the diversity of experimental protocols and
-the difficulty of cross-study comparison due to variations in dataset
-size, task design, and validation strategy. A key limitation across
-this body of work is the predominant use of unilateral sensing,
-despite the well-established motor asymmetry of PD, where symptoms
-onset and progress more severely on one side of the body. Our work
-explicitly exploits bilateral sensing through a cross-attention
-mechanism designed around this clinical observation.
+CNNs were used for IMU time series for gait and tremor classification~\citep{soumma2025fog}. While LSTMs have been applied to capture sequential motor signals dependencies~\citep{guo2022}, and CNN-Transformer hybrids for single waist-worn FoG detection have been employed accelerometer~\citep{sigcha2022}. A limitation common across this work is the heavy reliance on unilateral sensing,despite the well-known motor asymmetry in PD Symptoms.
+Transformer architecture~\citep{vaswani2017} is suitable for modelling the irregular, periodic nature of motor symptoms, as self-attention lets the model make associations between distant timesteps simultaneously. 
 
-\subsection{Transformer Architectures for Medical Time Series}
+For Human Activity Recognition (HAR) tasks, dual-stream architectures have been designed using parallel encoders for preprocessing various sensor modalities prior to fusion, The PD has also been explored in multi-scale frequency-aware architectures for severity assessment~\citep{zhao2025mfam}. Yet existing dual-stream designs fuse the streams using concatenation or addition, without any explicit modelling of the contralateral relation between left and right motor signals.
 
-Transformer models, originally proposed by \citet{vaswani2017} for
-natural language processing, have been increasingly applied to time
-series classification. Their self-attention mechanism allows the model
-to attend to distant timesteps simultaneously, which is advantageous
-for capturing the irregular, episodic nature of motor symptoms such as
-FoG. Dual-stream or two-stream transformer designs have been proposed
-for HAR, using parallel encoders to process different sensor
-modalities or spatial streams before fusion~\citep{xiao2022}. However,
-existing dual-stream designs typically fuse streams through simple
-concatenation or addition, without explicitly modelling the
-contralateral relationship between left and right motor signals. Our
-architecture fills this gap by replacing independent fusion with
-cross-attention between the two streams.
 
-\subsection{Self-Supervised Contrastive Learning for Time Series}
+Self-supervised contrastive representation learning~\citep{oord2018} has become a powerful learning paradigm for unlabelled clinical data. TS-TCC~\citep{eldele2021} combines temporal and contextual dissimilarity. LIFT-PD~\citep{soumma2025liftpd} gaining competitive performance with $40\%$ fewer labelled samples. These approaches successfully transfer to downstream clinical task but have not been validated on bilateral IMU data for PD classification, where augmentation strategies need to ensure clinically meaningful asymmetric bands between the two wrist streams.
 
-Self-supervised contrastive representation learning has gained
-significant traction as a method for learning from unlabelled data.
-In the contrastive framework, a model is trained to map an anchor
-sample $x_i$ and its augmented positive counterpart $x_i^+$ to nearby
-embeddings, while pushing embeddings of negative samples $x_j$
-($j \neq i$) further apart. The infoNCE loss~\citep{oord2018} formalises
-this objective by treating all other samples in a batch as negatives,
-enabling the model to contrast several negative samples simultaneously,
-which is more efficient for representation learning than single-pair
-objectives. TS-TCC~\citep{eldele2021} proposes a time-series-specific
-framework combining temporal and contextual contrasting with strong
-and weak augmentations, demonstrating competitive label efficiency on
-HAR and medical datasets. These methods show that self-supervised
-contrastive representation learning can learn general representations
-from unlabelled medical time series that transfer effectively to
-downstream tasks with limited annotations. However, these methods have
-not been evaluated on bilateral IMU data for PD detection, where the
-augmentation strategy must preserve clinically meaningful asymmetric
-motor patterns. Our work addresses this gap.
 
-\subsection{Nested Cross-Validation in Clinical Machine Learning}
+Finally, an continuing challenge in clinical ML is to avoid optimistic bias by conflating model selection with performance estimation~\citep{varma2006}. The vast majority of studies reporting PD detection evaluate results from a single split or flat $k$-fold; they yield models that are difficult to compare, and potentially too optimistic.
+metrics.
 
-A persistent problem in medical machine learning is optimistic bias:
-when hyperparameter selection and performance estimation are performed
-on the same data split, reported metrics overestimate true
-out-of-sample performance~\citep{varma2006}. Nested cross-validation
-addresses this by separating the model selection loop (inner folds)
-from the performance estimation loop (outer folds), providing less
-biased estimates of how well predictive performance generalises to new
-data points. This bias-variance tradeoff is especially important in
-clinical settings with small patient cohorts, where single-fold or
-holdout validation can produce highly variable and misleading
-estimates. Despite its importance, many published PD detection studies
-report performance from a single train/test split or flat k-fold,
-making results difficult to compare and potentially overoptimistic.
-In this work, we apply Optuna-based hyperparameter search on an inner
-validation fold (Fold~1) and evaluate the selected configuration
-across all five outer folds using patient-level stratified splitting
-to prevent data leakage.
+All these challenges have been addressed in our studies, which addressed the challenges in detecting the asymmetry in PD symptoms, scarcity of labelled data, generalization and real-life deployability .
+
+
 
 
 % ═════════════════════════════════════════════════════════════════
@@ -317,47 +131,27 @@ to prevent data leakage.
 
 \subsection{Overview}
 
+
+
+%.....................................................
+
 We use the PADS (Parkinson's Disease Smartwatch) dataset from
-PhysioNet~\citep{varghese2024}. It contains sensor data from bilateral
-wrist-worn smartwatch recordings of 469 participants performing 10
-standardised motor tasks. The dataset comprises three groups: 291
-patients with Parkinson's Disease (PD), 79 Healthy Controls (HC), and
-99 patients with Differential Diagnosis (DD) conditions that show
-Parkinson's-like motor symptoms but are caused by different
-neurodegenerative diseases. IMU data is chosen for this task given its
-established effectiveness in detecting motor symptoms such as tremor
-and bradykinesia.
+PhysioNet~\citep{varghese2024}. It contains bilateral wrist-worn smartwatch recordings from
+469~participants performing 10~standardized motor tasks designed by expert neurologists. 
+The dataset comprises three groups: 291~patients with PD, 79~Healthy Controls~(HC), and 99~patients with Differential Diagnosis~(DD), diseases that shows parkinson's like motor symptoms but are distinct neurological disorder including essential tremor, atypical Parkinsonism,secondary causes of Parkinsonism, and multiple sclerosis.
+The dataset also includes demographics, medical history, and PD-specific non-motor symptom questionnaires, making it suitable for diagnostic studies.
 
-\subsection{Sensor Modality}
+Each participant wears two Apple Watch Series~4 devices, one on each wrist, providing six-axis IMU measurements: three accelerometer axes ($a_x, a_y, a_z$) capturing linear movement and three gyroscope axes ($\omega_x, \omega_y, \omega_z$) recording angular velocity. These tasks are \textit{CrossArms}, \textit{DrinkGlas}, \textit{Entrainment}, \textit{HoldWeight},\textit{LiftHold}, \textit{PointFinger}, \textit{Relaxed}, \textit{StretchHold}, \textit{TouchIndex}, and \textit{TouchNose}, Tasks \textit{Relaxed} and \textit{RelaxedTask} each being $10$~seconds to $20$~seconds long, sampled at $100$~Hz~frequency.
 
-Each participant wears a smartwatch on both wrists, providing six-axis
-IMU measurements per wrist. Three axes are from the accelerometer
-($a_x, a_y, a_z$), which detects linear movements, and three axes are
-from the gyroscope ($\omega_x, \omega_y, \omega_z$), which records
-angular movements. Signals are sampled at $100$~Hz.
-Figure~\ref{fig:sensor_viz} visualises the sensor data of a
-participant performing the \textit{HoldWeight} task, showing distinct
-patterns indicative of tremor and bradykinesia.
+Figure~\ref{fig:sensor_viz} shows comparative data from randomly selected participants from HC,PD and DD classes performing the \textit{HoldWeight} task, showing distinct temporal patterns indicative of tremor and bradykinesia.
 
-\begin{figure}[!ht]
+\begin{figure}[H]
   \centering
-  \includegraphics[width=0.5\textwidth,height=0.25\textheight,keepaspectratio]{image5.png}
+  \includegraphics[width=0.8\textwidth,height=0.25\textheight,keepaspectratio]{eda.png}
   \caption{IMU sensor data from a participant performing the
-           \textit{HoldWeight} task. Distinct temporal patterns in the
-           accelerometer and gyroscope channels are indicative of motor
-           symptoms.}
+           \textit{HoldWeight} task.}
   \label{fig:sensor_viz}
 \end{figure}
-
-\subsection{Motor Tasks}
-
-Ten standardised motor tasks are recorded from clinical trials:
-\textit{CrossArms}, \textit{DrinkGlas}, \textit{Entrainment},
-\textit{HoldWeight}, \textit{LiftHold}, \textit{PointFinger},
-\textit{Relaxed}, \textit{StretchHold}, \textit{TouchIndex}, and
-\textit{TouchNose}. Tasks \textit{Relaxed} and \textit{RelaxedTask}
-are 20~seconds in duration; all remaining tasks are 10~seconds.
-
 
 % ═════════════════════════════════════════════════════════════════
 \section{Methodology}
@@ -366,190 +160,93 @@ are 20~seconds in duration; all remaining tasks are 10~seconds.
 
 \subsection{Problem Definition}
 
-This study aims to develop a method for classifying PD from HC and
-from DD using time-series data collected from wearable IMU sensors.
-Each input sample contains left ($L$) and right ($R$) wrist signal
-pairs, denoted as $\mathbf{X} = (\mathbf{X}^L, \mathbf{X}^R) \in
-\mathbb{R}^{T \times 2C}$, where $C{=}6$ denotes the number of sensor
-channels per wrist, $2C{=}12$ is the total channel count across both
-wrists, and $T{=}256$ is the number of timesteps per sample. Each
-sample is associated with a class label $y \in \{\text{HC}, \text{PD},
-\text{DD}\}$.
 
-Instead of a single three-class objective, we divide the problem into
-two distinct binary classifiers. The model learns a mapping function
-$f : \mathbb{R}^{T \times 2C} \rightarrow [0,1]^2$, predicting
-probabilities for HC vs.~PD (sample space $y \in \{\text{HC},
-\text{PD}\}$) and PD vs.~DD (sample space $y \in \{\text{PD},
-\text{DD}\}$). The PD--DD boundary is especially challenging due to
-the overlap of motor patterns between the two groups.
+In all, each input sample is a pair of synchronous left $(L)$ and right $(R)$ wrist signals: 
+$\mathbf{X} = (\mathbf{X}^L, \mathbf{X}^R) \in \mathbb{R}^{T \times 2C}$,  where $C=6$ is the number of sensor channels per wrist and $2C=12$ the total number of channels.  At $256$ time steps per window we have $T$. Each sample comes with a label  $(y \in \{\text{HC}, \text{PD}, \text{DD}\})$. 
+
+We decompose classification into two binary tasks: the model learns 
+$f : \mathbb{R}^{T \times 2C} \rightarrow [0, 1]^2$, outputing probabilities for  HC~vs.~PD and PD~vs.~DD. 
+
+Raw signal $\mathbf{X} \in \mathbb{R}^{T_{\text{raw}} \times C}$ is transformed to $N$ windows after DHWT  (Section~\ref{sec:windowing}):  $\mathbf{X}_W = [\mathbf{x}_{w_1}, \ldots, \mathbf{x}_{w_N}] \in \mathbb{R}^{N \times T \times 2C}$, 
+and a label is assigned for each window.
 
 \subsection{Data Preprocessing}
 
-\subsubsection{Label Encoding}
+ The six channels of IMU signals per wrist, were selected, discarding any additional channels in the recordings. The first 0.5 seconds (50 samples) of each task is then cut-off to eliminate transient artifacts caused by sensor initialization and the participants settling into the assigned tasks.
 
-A hierarchical labelling strategy supports two independent binary
-classification heads. DD samples are masked ($-1$) and ignored during
-loss computation for the HC-PD head; HC samples are masked ($-1$) for
-the PD-DD head. This ensures each head is trained only on relevant
-samples, which also prevents data leakage between heads.
-
-\subsubsection{Patient-Level Stratified K-Fold Cross-Validation}
-
-A patient-level stratified 5-fold cross-validation strategy is
-applied. The stratified approach ensures equal class distribution in
-each fold. K-fold cross-validation is applied to obtain less biased
-estimates of true out-of-sample prediction performance, reducing
-variance in evaluation across different data partitions. A
-patient-level split is enforced: all windows from a given patient are
-assigned entirely to either the training or the validation set,
-preventing data leakage across patient boundaries.
-
-\subsubsection{Downsampling}
-
-Raw signals are resampled from $100$~Hz to $64$~Hz via polyphase
-resampling. Frequencies above $64$~Hz are irrelevant to HAR
-activities, since human motor signals are predominantly below
-$20$~Hz, so the reduction in sampling rate incurs no loss of
-diagnostic information.
-
-\subsubsection{Band-Pass Filtering}
-
-Human voluntary movements and clinically relevant motor symptoms such
-as tremor and FoG are concentrated in the low-frequency,
-high-sensitivity band of $0.1$--$20$~Hz. A fourth-order Butterworth
-band-pass filter with passband $[0.1,\,20]$~Hz is applied using
-zero-phase forward-backward filtering to avoid phase distortion. The
-low-frequency cutoff removes DC drift; the high-frequency cutoff
-suppresses sensor noise above the motor-relevant band.
-
-\subsubsection{Overlapping Window Segmentation}
+\subsubsection{Down-Sampling and Band-pass filtering}
 \label{sec:windowing}
+ The signal was then down-sampled from 100 Hz to 64 Hz using polyphase resampling. This frequency in effective range for recognizing human motor activity with accelerometer sensors, despite reducing memory loads and computational complexity. 
+Then, we applied a fifth-order Butterworth band-pass filter with a band of [0.1, 20] Hz using zero-phase forward-backward filtering (filtfilt) to avoid phase distortion. Most clinically relevant human motor activity locates below 20 Hz, such as resting tremor (4–6 Hz) and voluntary movement (< 5 Hz). The band-pass filtering preserves all crucial bands while cutting out noise such as low-frequency DC offsets and high-frequency sensor artifacts. 
+The impact of this filtering step on model performance is discussed in Section~\ref{sec:ablation_bp}.
 
-IMU signals are segmented into consecutive windows of $256$
-timesteps ($4$~seconds at $64$~Hz). The participant counts are
-disproportionate (HC: 79, PD: 291, DD: 99); uniform non-overlapping
-sampling produces severe class imbalance, biasing the model toward PD.
-To mitigate this, an overlapping sampling strategy is applied:
-minority classes receive higher window overlap to generate more samples
-from the same recording duration. We applied $70\%$ overlap to HC
-samples, $0\%$ to PD, and $65\%$ to DD. This produced approximately
-$8{,}000$ windows per class in the training set ($25{,}640$ total),
-distributed evenly across folds via stratified sampling. The number of
-windows for a signal of length $L$ with window size $W$ and step size
-$s$ is:
-\begin{equation}
-  N_w = \left\lfloor \frac{L - W}{s} \right\rfloor + 1
-\end{equation}
+\subsubsection{Hierarchical Label encoding strategy}
+\label{sec:masking} 
+To design the hierarchical binary classification method, a masking strategy is applied during labelling. For a Healthy participant, the HC~vs.~PD label is set to $0$ while the PD~vs.~DD label is masked as $-1$; for a PD
+participant, HC~vs.~PD head is lableled $1$ and PD~vs.~DD is labelled $0$; and for the DD
+participant, HC~vs.~PD head is masked as $-1$ and PD~vs.~DD is $1$.
+During training, the masked labels are excluded from loss calculation for the corresponding classification head. This ensures that each classifier is learning only the samples relevant to its decision boundary.  
 
-\subsection{Dual-Channel Cross-Attention Transformer}
+ 
+\subsubsection{Imbalanced Data Mitigation}
+\label{sec:windowing}
+ 
+IMU signals are segmented into windows of $T{=}256$ timestamps
+($4$~seconds at $64$~Hz). Uniform non-overlapping sampling produced severe class imbalance, due to highly disproportionate participant counts (HC:~79, PD:~291,DD:~99) in the dataset,causing the model to predict only majority class (PD). to mitigate this Differential Hopping Windowing Technique (DHWT)~\citep{soumma2025liftpd}  was applied . Which applies variable overlap per class: $70\%$ for HC, $0\%$ for PD, and $65\%$ for DD\@.
+% The number of windows for a signal of length $L$ with window size $W$
+% and step $s$ is:
+% \begin{equation}
+%   N_w = \left\lfloor \frac{L - W}{s} \right\rfloor + 1
+% \end{equation}
+This created around ${\sim}8{,}000$ windows per class(${\sim}25{,}640$ total), distributed evenly across folds.
+
+A patient-level stratified 5-fold cross-validation is applied to form train set and validation set. Stratified cross-validation ensures equal distribution of class labels in every fold, for a less biased estimates of true out-of-sample performance. The patient-level splitting ensures patient-independent training of the model.
+ 
+
+
+\subsection{Model Architecture and Training}
 \label{sec:base_model}
-
-The architecture processes left and right wrist window samples
-independently through parallel encoders. The design is motivated by
-the well-established motor asymmetry of Parkinson's Disease: symptoms
-typically occur more severely on one side, making cross-attention
-between left and right wrist signals clinically meaningful.
-Figure~\ref{fig:architecture} illustrates the full pipeline.
-
-\begin{figure}[!ht]
-  \centering
-  \includegraphics[width=0.7\textwidth,height=0.25\textheight,keepaspectratio]{cross_attn.png}
-  \caption{Dual-channel cross-attention Transformer. Left and right
-           streams are projected, position-encoded, and refined
-           through $N$ cross-attention layers before pooling and
-           dual-head classification.}
-  \label{fig:architecture}
-\end{figure}
-
-\subsubsection{Input Projection and Positional Encoding}
-
-Each wrist's $C{=}6$ channel input is linearly projected to a
-$d$-dimensional embedding space. Sinusoidal positional encodings are
-applied to inject temporal order into the embeddings, following the
-standard Transformer methodology~\citep{vaswani2017}.
-
-\subsubsection{Cross-Attention Layers}
-
-Each of the $N$ stacked cross-attention layers has three sequential
-sub-layers. In the cross-attention sub-layer, each wrist's embedding
-acts as Queries ($Q$) and attends over the opposite wrist's embedding
-as Keys ($K$) and Values ($V$), allowing each stream to gather
-complementary information from the contralateral wrist. The output is
-followed by a residual connection and layer normalisation. For the
-left stream, where $\mathbf{H}^L$ queries into $\mathbf{H}^R$:
+The architecture employs parallel encoder streams to process both left and right wrist windows. that are connected by cross-attention , motivated by
+the motor asymmetry of PD (Figure~\ref{fig:architecture}).
+Each wrist's $C{=}6$ channel input is linearly projected to
+$d$~dimensions, and sinusoidal positional encodings are added accordingly ~\citep{vaswani2017}. There are N cross-attention layers, each consisting of three sub-layers: (i) cross-attention, where the embedding of one wrist queries that of the other wrist's values; (ii) self-attention on each stream independently; and (iii)~a position-wise feed-forward network (two-layer MLP, ReLU)
+For the left stream:
 \begin{equation}
   \mathbf{H}^L \leftarrow \mathrm{LayerNorm}\!\left(
       \mathbf{H}^L + \mathrm{MHA}(\mathbf{H}^L,\, \mathbf{H}^R,\,
-      \mathbf{H}^R)
-  \right)
+      \mathbf{H}^R) \right)
 \end{equation}
-The right stream is updated symmetrically with $\mathbf{H}^R$ as
-queries over $\mathbf{H}^L$. A self-attention sub-layer then refines
-each stream's own embedding. Finally, a position-wise feed-forward
-network applies a two-layer MLP with ReLU activation.
+This produces $\mathbf{z} \in \mathbb{R}^{2d}$  by applying global average pooling over the output of the $N$ layers, giving $\mathbf{z}^L, \mathbf{z}^R \in \mathbb{R}^d$ which is then passed to two classification heads (linear + softmax).
 
-\subsubsection{Pooling, Fusion, and Classification}
 
-After $N$ attention layers, global average pooling is applied to each
-stream, yielding $\mathbf{z}^L, \mathbf{z}^R \in \mathbb{R}^d$.
-These are concatenated to form $\mathbf{z} = [\mathbf{z}^L \|
-\mathbf{z}^R] \in \mathbb{R}^{2d}$, which is fed into two independent
-classification heads---one for HC-PD and one for PD-DD---each
-implemented as a single linear layer followed by softmax.
 
-\subsection{Training Procedure}
 
-\subsubsection{Objective Function}
-
-The cross-entropy loss is applied in each classification head,
-computed only over samples with valid (non-masked) labels for that
-head. The joint loss is the average of the two masked losses:
+Cross-entropy loss is calculated per head over non-masked samples, and the joint loss averages the two:
 \begin{equation}
 \mathcal{L} = \frac{1}{|\mathcal{S}|} \sum_{s \in \mathcal{S}}
 \mathcal{L}_s, \qquad
 \mathcal{L}_s = -\sum_{c=1}^{2} y_{s,c} \log \hat{p}_{s,c}
 \end{equation}
-
-\subsubsection{Optimisation}
-
-The model is trained with AdamW (weight decay $0.01$), gradient
-clipping at unit norm, and a ReduceLROnPlateau scheduler (factor
-$0.5$, patience $5$ epochs). Training runs for up to $100$ epochs
-with batch size $32$.
+The AdamW~\citep{loshchilov2019} (weight decay $0.01$) optimizer was used for training,
+gradient clipping at unit norm, ReduceLROnPlateau (factor $0.5$,patience $5$), up to $100$ epochs with the batch size of~$32$ and a learning rate of $5{\times}10^{-4}$ and a  dropout~of $0.2$.
+The embedding dimension of the base model is $d{=}64$, $N{=}3$
+cross-attention layers, $h{=}8$ attention heads, feed-forward~$256$ dimensional feed-forward network layer.
 
 \subsection{Self-Supervised Pre-training}
 \label{sec:ssl}
 
-We apply self-supervised contrastive representation learning as a
-pre-training stage before fine-tuning on labelled data. True labels
-for clinical samples require annotation by a specialist, making
-labelled data scarce and expensive. By first learning general signal
-representations from unlabelled windows, the model can transfer
-useful structural information to the downstream classification task.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=1.0\textwidth,height=0.6\textheight,keepaspectratio]{cross_attn.png}
+  \caption{Dual-channel cross-attention Transformer architecture.}
+  \label{fig:architecture}
+\end{figure}
 
-Three types of samples are required in contrastive learning: an anchor
-sample $z_i$, a positive sample $z_i^+$ created by augmenting the
-anchor, and negative samples $z_j$ ($j \neq i$) drawn from the same
-batch. Crucially, only the encoder weights are optimised during
-pre-training; the classification heads are not updated and are trained
-exclusively during the subsequent fine-tuning stage.
 
-Two augmentation strategies are applied in alternation with $50\%$
-probability: temporal warping~\citep{um2017} and Gaussian noise
-($\sigma{=}0.05$). Temporal warping applies non-linear transformations
-to the time axis via cubic spline interpolation with $k{=}4$ interior
-knots displaced from $\mathcal{N}(1.0,\,0.3^2)$, applied
-independently per IMU channel with pinned endpoints to avoid boundary
-artifacts. Samples are chosen randomly without using any labels.
-
-The infoNCE (Information Noise-Contrastive Estimation)
-loss~\citep{oord2018} compels the embedding of anchor $z_i$ to be closer
-to its positive $z_i^+$ while pushing it away from all other samples
-in the batch ($i \neq j$). Using the batch as a source of negatives
-allows the model to contrast several negative samples simultaneously,
-which is more efficient for learning representations than single-pair
-approaches:
+Self-supervised contrastive representation learning as a pre-training stage before fine-tuning on labelled data, to transfer useful structural information to downstream classification task.  
+An anchor sample ~$z_i$, positive~$z_i^+$ augmented from the anchor sample, and negative samples~$z_j$ ($j \neq i$) which is augmented from different class than the anchor sample are constructed per batch.
+Two augmentations technique alternate with $50\%$ probability: temporal warping~\citep{um2017} via cubic spline interpolation ($k{=}4$knots, $\mathcal{N}(1.0,\,0.3^2)$, pinned endpoints) and Gaussian
+noise ($\sigma{=}0.05$). The infoNCE loss is calculated per batch with a random sampling strategy~\citep{oord2018} is:
 \begin{equation}
 \mathcal{L}_{\mathrm{NCE}} =
 - \frac{1}{B} \sum_{i=1}^{B}
@@ -559,9 +256,7 @@ approaches:
 \sum_{j=1}^{B} \exp\!\left(\mathrm{sim}(z_i, z_j)/\tau\right)
 }
 \end{equation}
-where $\mathrm{sim}(\cdot,\cdot)$ denotes cosine similarity and
-$\tau$ is a temperature hyperparameter. After pre-training, the
-encoder is fine-tuned end-to-end on the labelled downstream task.
+After pre-training, the full model is fine-tuned end-to-end.
 
 
 % ═════════════════════════════════════════════════════════════════
@@ -571,76 +266,30 @@ encoder is fine-tuned end-to-end on the labelled downstream task.
 
 \subsection{Experimental Setup}
 
-All models are implemented in PyTorch and trained on a CUDA-enabled
-GPU. Signal processing uses SciPy (Butterworth filter, polyphase
-resampling). Hyperparameter search uses Optuna with the TPE sampler
-over 40 trials in a nested cross-validation framework, with Fold~1 as
-the internal validation fold; remaining folds serve as holdout
-validation. Edge inference runs on a Raspberry Pi CPU.
-
-The base architecture uses $d_{\text{model}}{=}128$, $N{=}4$
-cross-attention layers, $h{=}8$ attention heads, feed-forward
-dimension $512$, dropout $0.1$, and sequence length $T{=}256$. The
-edge-optimised variant uses $d_{\text{model}}{=}32$, $N{=}3$,
-feed-forward dimension $256$, learning rate $2.91{\times}10^{-4}$,
-weight decay $1.62{\times}10^{-4}$, and batch size $32$.
-
-All results are reported as mean$\,\pm\,$standard deviation across
-5-fold cross-validation. Evaluation metrics are accuracy, precision,
-recall, and F1-score for each classification head, and combined
-accuracy (average of the two head accuracies) as the primary
-summary metric.
+All models were implemented in PyTorch and trained on a CUDA-compatible
+NVIDIA GPU\@. and uses SciPy for signal processing ; hyperparameter search uses Optuna (TPE sampler, 40~trials) the Fold~1 of the nested cross-validation as the internal validation fold. The Optuna-optimised variant selected for edge deployment uses
+$d{=}32$, $N{=}3$, feed-forward dimension~$256$, learning rate
+$2.91{\times}10^{-4}$, weight decay $1.62{\times}10^{-4}$, dropout
+$0.12$, and batch size~$32$---a $2{\times}$ smaller embedding
+dimension than the base model. The inference runs on a Raspberry Pi~4 CPU\@.
+All base model results are reported as mean$\,\pm\,$std across a 5-fold
+cross-validation.
 
 \subsection{Base Model Performance}
 
-The base model trained with band-pass filtering and downsampling
-achieved a mean accuracy of $93.31\%\pm0.22\%$ (precision
-$93.81\%\pm0.31\%$, recall $93.31\%\pm0.22\%$, F1
-$93.23\%\pm0.22\%$) for HC-PD classification and $92.34\%\pm0.08\%$
-accuracy (precision $93.14\%\pm0.18\%$, recall $92.34\%\pm0.08\%$,
-F1 $92.28\%\pm0.08\%$) for PD-DD classification across 5-fold
-cross-validation, giving a combined accuracy of $92.83\%$. The higher
-accuracy on the HC-PD partition confirms that differentiating PD from
-DD is more challenging due to the commonality of motor patterns.
-The t-SNE plot in Figure~\ref{fig:initial_tsne} shows a region of
-overlap common to PD and DD samples that is absent in the HC-PD
-embedding, visually confirming this difficulty.
+The base model achieved $93.12\%\pm0.43\%$ in HC~vs.~PD accuracy and
+$87.04\%\pm3.66\%$ PD~vs.~DD accuracy across 5~folds, an average
+accuracy of $90.08\%$. Table~\ref{tab:perfold} reports the per-fold result.
+HC~vs.~PD performs consistently higher across folds
+($92.51$--$93.55\%$), but PD~vs.~DD fluctuates
+($82.33$--$92.51\%$), reflecting the clinical challenge of partitioning
+the PD~vs.~DD boundary.
+The t-SNE embedding in Figure~\ref{fig:initial_tsne} visualizes this
+asymmetry: PD~vs.~DD embeddings overlaps in a common region unlike
+HC~vs.~PD space.
 
-% [TODO] ADD PER-FOLD BREAKDOWN TABLE HERE once per-fold numbers
-%        are available. Structure:
-% \begin{table}[htbp]
-% \caption{Per-fold results, base model.}
-% \begin{center}
-% \begin{tabular}{cccc}
-% \toprule
-% Fold & HC-PD Acc & PD-DD Acc & Combined \\
-% \midrule
-% 1 & ? & ? & ? \\
-% ... \\
-% Mean$\pm$Std & $93.31\pm0.22$ & $92.34\pm0.08$ & $92.83\%$ \\
-% \bottomrule
-% \end{tabular}
-% \end{center}
-% \end{table}
 
-\begin{figure}[!ht]
-\centering
-\begin{minipage}[b]{0.4\textwidth}
-    \centering
-    \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{roc_hc_vs_pd.png}
-    \centerline{\small (a) HC vs PD}
-\end{minipage}
-\hfill
-\begin{minipage}[b]{0.4\textwidth}
-    \centering
-    \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{roc_pd_vs_dd.png}
-    \centerline{\small (b) PD vs DD}
-\end{minipage}
-\caption{ROC curves for the base model (Fold~1).}
-\label{fig:initial_roc}
-\end{figure}
-
-\begin{figure}[!ht]
+\begin{figure}[H]
 \centering
 \begin{minipage}[b]{0.4\textwidth}
     \centering
@@ -653,29 +302,46 @@ embedding, visually confirming this difficulty.
     \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{tsne_pd_vs_dd.png}
     \centerline{\small (b) PD vs DD}
 \end{minipage}
-\caption{t-SNE embeddings for the base model (Fold~1). The region of
-         PD/DD overlap visible in~(b) is absent in the HC/PD
-         embedding~(a).}
+\caption{t-SNE embeddings. PD/DD overlap in~(b) is absent in~(a).}
 \label{fig:initial_tsne}
 \end{figure}
+\vspace{-1.5em}
 
-\subsection{Band-Pass Filtering Ablation}
-\label{sec:ablation_bp}
+\begin{table}[H]
+\caption{Per-fold results for the base model (with band-pass filtering).}
+\label{tab:perfold}
+\begin{center}
+\begin{tabular}{ccccccc}
+\toprule
+\multirow{2}{*}{\textbf{Fold}} &
+  \multicolumn{2}{c}{\textbf{HC vs PD}} &
+  \multicolumn{2}{c}{\textbf{PD vs DD}} &
+  \multirow{2}{*}{\textbf{Comb.}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+& Acc & F1 & Acc & F1 & \\
+\midrule
+1 & 93.55 & 93.47 & 92.51 & 92.41 & 93.03 \\
+2 & 93.47 & 93.39 & 88.10 & 88.07 & 90.79 \\
+3 & 93.07 & 92.90 & 82.33 & 82.33 & 87.70 \\
+4 & 93.01 & 92.90 & 86.85 & 86.94 & 89.93 \\
+5 & 92.51 & 92.45 & 85.41 & 85.29 & 88.96 \\
+\midrule
+\textbf{Mean$\pm$Std} & \textbf{93.12$\pm$0.43} & 93.02$\pm$0.46 &
+  \textbf{87.04$\pm$3.66} & 87.01$\pm$3.65 & \textbf{90.08} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+\vspace{-1em}
 
-Band-pass filtering is fundamental in physiological signal processing.
-Significant human motor activity such as tremor and FoG is concentrated
-in the $0.1$--$20$~Hz band; signals above this range arise primarily
-from sensor noise unrelated to motor symptoms.
-Without band-pass filtering, the model achieved only
-$85.64\%\pm2.14\%$ (HC-PD) and $85.39\%\pm1.88\%$ (PD-DD) accuracy
-with substantially higher fold-to-fold variance, and the training
-curves in Figure~\ref{fig:bandpass_loss} confirm severe overfitting.
-With the filter applied, accuracy improved to $93.31\%\pm0.22\%$ and
-$92.34\%\pm0.08\%$ respectively, with the fold-to-fold standard
-deviation reduced by an order of magnitude, demonstrating that
-removing out-of-band noise is essential for reliable learning.
+%5.3 and 5.4 showed 85%
+\subsection{Effect of Band-Pass Filtering}
+\vspace{-0.5em}
+Without band-pass filtering, accuracy dropped to $85.98\%\pm2.74\%$~(HC~vs.~PD) and $85.39\%\pm2.33\%$~(PD~vs.~DD), with a substantially higher fold-to-fold variance. 
+Training curves  (Figure~\ref{fig:bandpass_loss}) shows severe overfitting compared to the filtered training.
+Filtering improved HC~vs.~PD accuracy by $7.14$~pp and reduced its standard deviation by $6{\times}$ ($2.74\% \to 0.43\%$),which proves that out-of-band noise actively hinders the model from learning stable motor representations.
 
-\begin{figure}[!ht]
+\begin{figure}[H]
 \centering
 \begin{minipage}[b]{0.4\textwidth}
     \centering
@@ -688,12 +354,20 @@ removing out-of-band noise is essential for reliable learning.
     \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{loss.png}
     \centerline{\small (b) With band-pass}
 \end{minipage}
-\caption{Loss curves illustrating overfitting without band-pass
-         filtering (Fold~1).}
+\caption{Loss curves showing overfitting without band-pass (Fold~1).}
 \label{fig:bandpass_loss}
 \end{figure}
 
-\begin{figure}[!ht]
+
+\subsection{Hierarchical vs.\ Three-Class Classification}
+
+The overall accuracy of the three-class model was $87.37\%\pm1.65\%$ .
+Per-class analysis showed near-perfect PD accuracy ($99.89\%$) but unsatisfactory HC performance ($77.86\%\pm6.29\%$)---the class with fewest samples, proving that when there is a single objective that must simultaneously separate HC from PD \emph{and} PD from DD, the model over-estimates on the easiest boundary
+at the cost of harder ones. 
+The proposed hierarchical classification gained a $2.71$~pp combined accuracy
+improvement by allowing each head to specialize.
+
+\begin{figure}[H]
 \centering
 \begin{minipage}[b]{0.4\textwidth}
     \centering
@@ -706,228 +380,80 @@ removing out-of-band noise is essential for reliable learning.
     \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{tsne_3class.png}
     \centerline{\small (b) Three-class t-SNE}
 \end{minipage}
-\caption{Three-class baseline ROC and t-SNE, showing significant
-         PD/DD overlap.}
+\caption{Three-class baseline showing PD~vs.~DD overlap.}
 \label{fig:3class_eval}
 \end{figure}
 
-\subsection{Hierarchical vs.\ Three-Class Classification}
-
-The three-class model achieved a mean accuracy of $88.35\%\pm0.83\%$
-(precision $89.67\%\pm0.83\%$, recall $88.35\%\pm0.83\%$, F1
-$88.32\%\pm0.88\%$). The learning objective of distinguishing healthy
-samples (HC) from diseased samples (PD, DD) is qualitatively different
-from distinguishing PD from DD. When optimised jointly, the model
-fails to focus on the subtle difference between PD and DD samples,
-resulting in lower performance on that boundary. The hierarchical
-dual-head approach yields a $4.48$~pp improvement in combined
-accuracy by decomposing the problem into two focused binary tasks.
-The ROC curves in Figure~\ref{fig:3class_eval} and the t-SNE
-embedding illustrate the model's difficulty in separating PD from DD
-under the three-class objective.
-
-\subsection{Hyperparameter Optimisation and Nested Cross-Validation}
-
-Hyperparameter tuning was conducted to achieve regularisation and to
-improve generalisation to unseen data. Hyperparameter search was
-conducted using Optuna (TPE sampler, 40 trials, MedianPruner) on
-Fold~1 as the internal validation fold within the nested
-cross-validation framework; the remaining folds serve as holdout
-validation to estimate generalisation performance without information
-leakage from the search. This ensures that reported accuracy is a less
-biased estimate of true out-of-sample performance.
-
-\begin{table}[htbp]
-\caption{Training vs.\ test accuracy at key epochs (Fold~1, Optuna
-         optimised model).}
-\label{tab:train_test_gap}
-\begin{center}
-\begin{tabular}{lccc}
-\toprule
-\textbf{Phase} & \textbf{Train Acc} & \textbf{Test Acc} & \textbf{Gap} \\
-\midrule
-Best checkpoint (Epoch~45) & 89.39\% & 91.82\% & $-$2.43\% \\
-Final epoch (Epoch~80)     & 92.10\% & 88.78\% & $+$3.32\% \\
-\bottomrule
-\end{tabular}
-\end{center}
-\end{table}
-
-The Optuna-optimised model (best checkpoint, Epoch~45) achieves a
-test accuracy of $88.78\%$, approximately $4$~pp below the base model,
-in exchange for a $4\times$ reduction in embedding dimension
-($d{=}32$ vs.\ $d{=}128$). The negative train/test gap at Epoch~45
-(test exceeds train) indicates good generalisation rather than
-overfitting at that checkpoint. The optimised model shows
-comparatively stronger performance on the PD-DD head, suggesting that
-the smaller, more regularised architecture generalises the subtle
-PD/DD boundary better.
-
-\subsection{Edge Deployment on Raspberry Pi}
-\label{sec:pi}
-
-The optimised model was deployed on a Raspberry Pi CPU to evaluate
-real-time inference. The inference pipeline downsamples incoming
-$100$~Hz samples to $64$~Hz, applies a causal fifth-order Butterworth
-band-pass filter sample-by-sample using second-order sections (SOS)
-with persistent filter state, and accumulates $256$ samples in a
-circular buffer. Inference is triggered every $128$ new samples
-($50\%$ overlap, $2.0$~s step), producing a prediction at $0.5$~Hz.
-The mean per-window inference time is $48.32$~ms at $0.02\%$ CPU
-utilisation. This confirms feasibility for deployment on an edge
-device such as a smartwatch for real-time monitoring.
-
 \subsection{Self-Supervised Pre-training and Label Efficiency}
 
-The self-supervised model fine-tuned on $100\%$ of labelled data
-achieved a combined accuracy of $92.87\%$ (HC-PD: $93.35\%$,
-PD-DD: $92.40\%$), competitive with the fully supervised base model.
-A label-efficiency study evaluated fine-tuning across fractions of the
-labelled set; results are summarised in Table~\ref{tab:ssl_label_eff}
-and Figure~\ref{fig:label_eff}. With only $5\%$ of labelled data the
-model reaches $80.49\%$ combined accuracy, and with $20\%$ it already
-exceeds $91\%$. The rapid accuracy gain between $5\%$ and $20\%$,
-followed by a gain of less than $2$~pp from $20\%$ to $100\%$,
-demonstrates that the self-supervised pre-training has learned general
-IMU representations that require very few labels to transfer
-effectively to the downstream task.
-
-\begin{table}[htbp]
-\caption{SSL label-efficiency: fine-tuning accuracy vs.\ labelled
-         fraction (combined accuracy across both heads).}
-\label{tab:ssl_label_eff}
-\begin{center}
-\begin{tabular}{rccc}
-\toprule
-\textbf{Labels (\%)} & \textbf{HC-PD Acc} & \textbf{PD-DD Acc} &
-\textbf{Combined} \\
-\midrule
-$5\%$   & $80.52\%$ & $80.46\%$ & $80.49\%$ \\
-$10\%$  & $87.62\%$ & $86.12\%$ & $86.87\%$ \\
-$20\%$  & $92.22\%$ & $89.82\%$ & $91.02\%$ \\
-$50\%$  & $92.70\%$ & $91.69\%$ & $92.20\%$ \\
-$70\%$  & $92.34\%$ & $92.10\%$ & $92.22\%$ \\
-$100\%$ & $93.35\%$ & $92.40\%$ & $92.87\%$ \\
-\bottomrule
-\end{tabular}
-\end{center}
-\end{table}
-
-\begin{figure}[!ht]
+We achieved a performance of $93.56\%$ (HC~vs.~PD) and $92.50\%$ (PD~vs.~DD) for SSL model on $100\%$ of labels.
+A combined accuracy of $93.03\%$ comparing with base model's result ($90.08\%$) beating the PD~vs.~DD thresholds, proving that self-supervised model learns better representations for hard boundary of the PD and DD classification.
+The SSL representation reaches saturation with only $20\%$ of the labels, the model reaches $91.96\%$ combined accuracy; the improvement is within $\sim 1$~pp from $20\%$ to $100\%$ of the labels.
+The linear probe evaluation with $100\%$ of labels, with frozen SSL encoder achieved $94.01\%$ overall accuracy ($94.12\%$ HC~vs.~PD, $93.90\%$ PD~vs.~DD), slightly exceeding the full fine-tuned model. This means that the contrastive pre-training learns representations which become linearly separable by a linear classifier provided sufficient labels, and that it is not strictly necessary to end-to-end fine-tune for strong performance with fully available labels. However, at lower fractions of labels the full fine-tuning has a noticeable contribution (e.g.\ $91.96\%$ vs.\ $82.14\%$ at $20\%$ labels), showing that strong performance can be achieved with as low as $20\%$ of data.
+ 
+ 
+\begin{figure}[H]
   \centering
-  \includegraphics[width=0.45\textwidth,height=0.22\textheight,keepaspectratio]{accuracy_vs_labels.png}
-  \caption{Combined accuracy vs.\ labelled fraction. Performance
-           plateaus after $20\%$ labels, demonstrating effective
-           representation transfer from self-supervised pre-training.}
+  \includegraphics[width=0.8\textwidth,height=0.22\textheight,keepaspectratio]{accuracy_vs_labels.png}
+  \caption{Combined accuracy vs.\ labelled fraction. Full fine-tune
+           plateaus after ${\sim}20\%$; linear probe scales steadily
+           and crosses the fine-tune at full labels.}
   \label{fig:label_eff}
 \end{figure}
 
-\subsection{Comparison with Foundation Model (TimesFM + LoRA)}
+\subsection{Comparison with Foundation Model}
+ 
+We fine-tuned the TimesFM~\citep{das2024}, a decoder-only foundation model
+pre-trained on large-scale time series data, by prefixing with a LoRA
+adapter~\citep{hu2022} (rank $r{=}6$, $\alpha{=}12$, dropout $0.15$,
+regularisation $0.1$) to the hidden dimension of $1{,}280$.
+Across 5-fold cross-validation, TimesFM+LoRA achieved
+$93.62\%\pm0.06\%$~(HC~vs.~PD) and $92.89\%\pm0.39\%$~(PD~vs.~DD), for a
+combined accuracy of $93.26\%$---with a high stability in standard deviation and
+competitive with the best models from this study.
 
-For comparative analysis, we fine-tuned TimesFM~\citep{das2024}, a
-foundation model pre-trained on large datasets for general-purpose
-forecasting tasks. We adapted it for classification by adding a LoRA
-(Low-Rank Adaptation) adapter~\citep{hu2022} with rank $r{=}6$, scaling
-factor $\alpha{=}12$, dropout $0.15$, and regularisation $0.1$,
-applied to the hidden dimension of $1{,}280$. LoRA is a
-parameter-efficient fine-tuning technique that adapts large
-pre-trained models to new tasks on smaller datasets by learning
-low-rank update matrices. This achieved $89.70\%$ (HC-PD) and
-$87.80\%$ (PD-DD) accuracy ($88.75\%$ combined), below the base
-model. This suggests that a forecasting foundation model does not
-transfer as effectively to this classification setting as a
-task-specific architecture trained from scratch.
+\subsection{Hyper-parameter Search using Nested-Cross Validation}
+We also conducted a nested cross-validation experiment with Optuna (TPE sampler, 20~trials with 3~inner folds) to search hyper-parameters across outer fold, to train the selected configuration for
+80~epochs. This yielded $93.61\%\pm0.09\%$~(HC~vs.~PD) and $92.57\%\pm0.07\%$~(PD~vs.~DD), with an average $93.09\%\pm0.05\%$ with, making it the most consistent near-zero variance result across folds. The Optuna search consistently favoured smaller architectures ($d{=}32$-$64$, $N{=}~2$--$3$ layers), confirming that smaller properly regularised model generalize well on this dataset.
 
-\subsection{Task-Wise Ablation (1D CNN and BiLSTM)}
 
-We trained task-specific 1D CNN and BiLSTM models for comparison. The
-1D CNN uses four convolutional blocks ($d{=}128$) with kernel sizes
-$7, 5, 3, 3$, followed by batch normalisation and max pooling. The
-BiLSTM uses two layers ($d{=}128$) with layer normalisation.
+\subsection{Task-Wise Ablation: 1D CNN and BiLSTM}
 
-The BiLSTM showed higher accuracy for tasks involving sustained
-postures with strong temporal structure: CrossArms ($92.39\%$),
-HoldWeight ($93.87\%$), LiftHold ($93.92\%$), and StretchHold
-($93.87\%$). The CNN performed comparatively better on tasks where
-spatial patterns within a window are more informative than temporal
-dependencies: Entrainment ($63.68\%$) and PointFinger ($65.86\%$).
-Tasks such as Entrainment, PointFinger, TouchIndex, and TouchNose
-consistently produced accuracy below $70\%$ for both models,
-indicating that these tasks elicit motor patterns that are difficult
-to discriminate at the window level for either architecture.
-Figure~\ref{fig:taskwise} visualises the per-task comparison.
+For per-task discriminability investigation we trained task-specific 1D~CNN (four conv blocks, $d{=}128$) and BiLSTM (two layers, $d{=}128$, bidirectional, dropout $0.3$) over 5-fold cross-validation.We found that the BiLSTM consistently outperformed CNN on all tasks (mean combined $90.98$\% vs.$85.01$\%) and particularly on Entrainment($96.01$\%), Relaxed ($95.47$\%), and sustained-posture tasks. The TouchNose had the most difficult challenge for both architectures(CNN $71.77$\%, BiLSTM $82.78$\%). 
+Figure~\ref{fig:taskwise} shows that PD features has temporal dependencies, hence BiLSTM performes better than CNN.
 
-\begin{figure}[!ht]
-  \centering
-  \includegraphics[width=0.5\textwidth,height=0.22\textheight,keepaspectratio]{image6.png}
-  \caption{Task-wise ablation: 1D CNN vs.\ BiLSTM combined accuracy
-           per motor task.}
-  \label{fig:taskwise}
+
+Table~\ref{tab:summary} compares mean results with variance of all the comparative studies.
+The low combined accuracy of the base model ($90.08\%$) is caused primarily by its high PD~vs.~DD variance ($\pm3.66\%$); all other approaches gained accuracy around ${\sim}93\%$ with substantially lower variance, suggesting that self-supervised learning helped learn subtle distinguishing features from PD~vs.~DD boundary. showed in Figure~\ref{fig:task wise} .
+ 
+\begin{figure}[H]
+\centering
+\begin{minipage}[b]{0.4\textwidth}
+    \centering
+    \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{model_comparison.png}
+    \centerline{\small (a) comparative graphs of models}
+\end{minipage}
+\hfill
+\begin{minipage}[b]{0.4\textwidth}
+    \centering
+    \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{taskwise_ablation.png}
+    \centerline{\small (b) task wise ablation of CNN LSTM}
+\end{minipage}
+\caption{t-SNE embeddings (Fold~1). PD/DD overlap in~(b) is absent in~(a).}
+\label{fig:task wise}
 \end{figure}
-
-\subsection{Consolidated Results}
-
-Table~\ref{tab:summary} consolidates 5-fold cross-validation results
-across all experimental variants. The hierarchical dual-head base
-model with band-pass filtering achieves the highest combined accuracy.
-SSL pre-training matches the supervised baseline while requiring
-significantly fewer labels.
-
-\begin{table}[htbp]
-\caption{Consolidated 5-fold cross-validation results
-         (mean$\,\pm\,$std\,\%). Best combined accuracy in bold.}
-\label{tab:summary}
-\begin{center}
-\begin{tabular}{lcccccc}
-\toprule
-\multirow{2}{*}{\textbf{Approach}} &
-  \multicolumn{2}{c}{\textbf{HC-PD}} &
-  \multicolumn{2}{c}{\textbf{PD-DD}} &
-  \multirow{2}{*}{\textbf{Combined}} \\
-\cmidrule(lr){2-3}\cmidrule(lr){4-5}
-& \textbf{Acc} & \textbf{F1}
-& \textbf{Acc} & \textbf{F1} & \\
-\midrule
-Base Model (w/ BP) &
-  $93.31{\pm}0.22$ & $93.23{\pm}0.22$ &
-  $92.34{\pm}0.08$ & $92.28{\pm}0.08$ & $\mathbf{92.83\%}$ \\
-Base Model (w/o BP) &
-  $85.64{\pm}2.14$ & --- &
-  $85.39{\pm}1.88$ & --- & $85.52\%$ \\
-Three-Class Baseline &
-  \multicolumn{2}{c}{$88.35{\pm}0.83$} &
-  \multicolumn{2}{c}{$88.32{\pm}0.88$} & $88.35\%$ \\
-SSL Fine-tune (100\%) &
-  $93.35$ & --- &
-  $92.40$ & --- & $92.87\%$ \\
-TimesFM LoRA ($r{=}6$) &
-  $89.70$ & --- &
-  $87.80$ & --- & $88.75\%$ \\
-\midrule
-Raspberry Pi (inference) &
-  \multicolumn{4}{c}{---} & ${\approx}48.32$~ms/win \\
-\bottomrule
-\end{tabular}
-\end{center}
-\end{table}
-
-% [TODO] ADD STATE-OF-THE-ART COMPARISON TABLE HERE once you have
-%        identified prior published results on the PADS dataset.
+ 
+ 
+\subsection{Edge Deployment}
+\label{sec:pi}
+We used the Optuna-optimized model ($d{=}32$, $N{=}3$) for evaluating the feasibility of real-time inference on Raspberry Pi~4 (ARM Cortex-A72, 4GB RAM). The pipeline reads from incoming samples at 100Hz, down-samples them to 64Hz and then applies a fifth order causal Butterworth band-pass filter one sample-by-sample, with the second-order sections (SOS) filter with a persistent filter state and $256$ samples are generated in a circular buffer.  Inference triggered every $128$ samples added to the buffer ($50\%$ overlap, $2.0$s step), resulting in predictions at $\sim 0.5$~Hz. The mean inference time of one sample is $48.87 \pm 4.52$~ms, throughput of $20.46$~FPS, $CPU$ usage: $0.2\%$, RAM consumption: $816.1$~MB.
+This demonstrated that the model can be comfortably accommodated by the resource constraints of a current smartwatch processor.
 
 \subsection{Cross-Attention Weight Analysis}
-
-Figure~\ref{fig:attn} visualises the cross-attention weight maps to
-provide insight into which temporal patterns the model attends to.
-Attention bands become progressively sparser across the classes from
-HC to PD and PD to DD. The HC class shows concentrated activity on
-earlier timesteps and around timestep~250, while PD samples show more
-distributed active bands, consistent with the irregular, recurrent
-nature of tremor and bradykinesia. The similarity between the active
-regions of PD and DD samples further confirms the difficulty of
-separating Parkinson's from other neurodegenerative disorders at the
-attention level.
-
-\begin{figure}[!ht]
+ Cross-attention weight maps of HC~vs.~PD and PD~vs.~DD are shown in Fig 2.
+From HC, to PD, to DD\@ the attention becomes sparser. HC exhibits a high activity concentration at early timestamps, in comparison to PD and DD, display correlated bands that are indicative of the episodic characteristics of tremor and bradykinesia. The resemblance between PD and DD attention patterns additionally reinforces the challenges of separating these groups.
+Figure~\ref{fig:attn} shows cross-attention weight maps.
+\begin{figure}[H]
 \centering
 \begin{minipage}[b]{0.48\textwidth}
     \centering
@@ -940,80 +466,77 @@ attention level.
     \includegraphics[width=\textwidth,height=0.2\textheight,keepaspectratio]{attention_comparison_pd_vs_dd.png}
     \centerline{\small (b) PD vs DD}
 \end{minipage}
-\caption{Cross-attention weight maps (Fold~1). Sparser attention in
-         PD and DD reflects distributed temporal motor symptom
-         patterns.}
+\caption{Cross-attention weight maps (Fold~1).}
 \label{fig:attn}
 \end{figure}
+\subsection{Consolidated Results}
 
-
+Table~\ref{tab:summary} consolidates $mean{\pm}std$  results from cross-validation evaluation.
+\begin{table}[H]
+\caption{Consolidated results. Best multi-fold combined accuracy in
+         bold.}
+\label{tab:summary}
+\begin{center}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Approach} & \textbf{Folds} &
+  \textbf{HC vs. PD}& \textbf{PD vs. DD}& \textbf{Comb.} \\
+\midrule
+Base Model (w/ BP) & 5 &
+  $93.12{\pm}0.43$ & $87.04{\pm}3.66$ & $90.08\%$ \\
+Base Model (w/o BP) & 5 &
+  $85.98{\pm}2.74$ & $85.39{\pm}2.33$ & $85.69\%$ \\
+Three-Class Baseline & 5 &
+  \multicolumn{2}{c}{combined $87.37{\pm}1.65$} & $87.37\%$ \\
+\midrule
+Nested CV (Optuna) & 5 &
+  $93.61{\pm}0.09$ & $92.57{\pm}0.07$ & $93.09\%$ \\
+SSL Fine-tune (100\%) & 3 &
+  $93.56 {\pm}0.05$& $92.50 {\pm}0.02$& $93.03\%$ \\
+SSL Fine-tune (20\%) & 3 &
+  $92.26 {\pm}0.7$& $91.67 {\pm}0.17$& $91.96\%$ \\
+SSL Linear Probe (100\%) & 1 &
+  $94.12 {\pm}0.02$& $93.90$ & $94.01\%$ \\
+TimesFM + LoRA & 5&
+  $93.62{\pm}0.06$ & $92.89{\pm}0.39$ & $\mathbf{93.26\%}$ \\
+\midrule
+BiLSTM (avg all tasks) & 5 &
+  \multicolumn{2}{c}{$90.98 {\pm}0.55$} & $90.98\%$ \\
+CNN (avg all tasks) & 5 &
+  \multicolumn{2}{c}{$85.01 {\pm}1.68$} & $85.01\%$ \\
+\midrule
+Raspberry Pi (inference) & --- &
+  \multicolumn{2}{c}{---} & $48.87$~ms/win \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
 % ═════════════════════════════════════════════════════════════════
 \section{Discussion}
 \label{sec:discussion}
 % ═════════════════════════════════════════════════════════════════
 
-The results demonstrate that the proposed Dual-Channel Cross-Attention
-Transformer is well suited to the interdisciplinary challenge of PD
-detection from wearable IMU data. The hierarchical binary
-classification strategy consistently outperforms the three-class
-baseline by decomposing a single hard objective into two focused tasks,
-reflecting the clinical reality that HC/PD and PD/DD represent
-qualitatively different discrimination problems. The $4.48$~pp
-combined accuracy gain confirms that the model benefits from learning
-each decision boundary independently.
+The hierarchical binary classification strategy, performs better than the three-class baseline model by $2.71\%$ points in combined accuracy. The three-class model achieves near-perfect PD accuracy at $99.89\%$, but sacrifices HC and DD performance. This shows that focusing on maximizing accuracy for a single class tends to favor the easiest boundary. Focusing on one objective favors the easiest boundary, as each head specializes in the hierarchical approach, crucial for the clinically challenging PD~vs.~DD boundary. 
 
-The band-pass filtering ablation highlights a fundamental property of
-medical time series data: the discriminative signal is concentrated in
-a narrow, low-frequency, high-sensitivity band ($0.1$--$20$~Hz), and
-out-of-band noise does not merely add difficulty---it actively prevents
-the model from learning meaningful patterns. The substantially higher
-fold-to-fold variance in the unfiltered condition ($\pm2.14\%$ vs.\
-$\pm0.22\%$ for HC-PD) illustrates that noise inflates variance in
-model estimates, which is precisely the regime where nested
-cross-validation and careful signal processing matter most.
+The breakdown by fold shows that PD~vs.~DD accuracy varies significantly, ranging from $82.33\%$ to $92.51\%$ with a standard deviation of $3.66\%$, likely due to the inherent complexity and variability in distinguishing between these conditions. HC vs. PD remains stable, with a standard deviation of $0.43\%$. This highlights the importance of cross-validated report rather than just averages, which could hide variability.
 
-The self-supervised pre-training results reveal an important property
-for clinical deployment: the model achieves over $91\%$ combined
-accuracy with just $20\%$ of labelled data, and further gains from
-additional labels are marginal. In practice, obtaining labelled
-clinical data requires a physician or specialist to assess each
-participant, which is a significant bottleneck. The SSL framework
-demonstrates that general IMU representations can be learned without
-any labels, substantially reducing the annotation burden for future
-data collection in new clinical populations or settings.
+Band-pass filtering, which isolates the motor-relevant signal within the $0.1$ to $20$~Hz band, provides a $7.14\%$ point improvement in HC~vs.~PD accuracy and reduces variance between folds by six times. This confirms that the motor-relevant signal lies within the $0.1$ to $20$~Hz band, while out-of-band noise disrupts learning. 
 
-The edge deployment on Raspberry Pi validates the feasibility of
-real-time monitoring on constrained hardware. At $48.32$~ms per
-inference window and $0.02\%$ CPU utilisation, the model is far within
-the computational budget of a modern smartwatch processor, positioning
-this framework as a viable component of a continuous disease monitoring
-system in which PD progression can be tracked passively during daily
-life.
+SSL pre-training shows strong label efficiency, achieving $91.02\%$ accuracy with $20\%$ of labels. Beyond this point, returns diminish. The linear probe, reaching $93.32\%$ accuracy with full labels, confirms that SSL features capture general motor patterns and can gain good performance with as little training as training the classifier only. In clinical settings where specialist annotation is a bottleneck, this suggests that the burden of annotation can be greatly reduced.
 
-The task-wise ablation reveals that no single baseline architecture is
-uniformly superior across all motor tasks, and that some tasks
-($<70\%$ for both models) remain genuinely difficult regardless of
-architecture. This suggests that task-aware fusion strategies and
-multi-task aggregation are important directions for improving
-robustness.
+The comparison reveals that the base model, SSL fine-tuning, and TimesFm fine-tuning all achieved around $93\%$ combined accuracy on the same partition, suggesting that these models effectively leverage pre-trained temporal representations for clinical IMU classification. The foundation model's competitive accuracy indicates that pre-trained temporal representations transfer well to clinical IMU classification, while the base model has a smaller deployment footprint.
+
+Edge deployment shows a response time of $48.32$~ms and $0.02\%$ CPU usage, confirming that real-time monitoring is feasible on limited hardware. 
+
+The task-wise CNN and BiLSTM ablation reveals that no single baseline architecture is superior across all motor tasks. Tasks involving sustained postures, like HoldWeight and LiftHold, benefit from the temporal modeling of the BiLSTM. In contrast, tasks with more localized spatial patterns favor the CNN. Notably, several tasks, such as Entrainment, PointFinger, TouchIndex, and TouchNose, remain below $70\%$ accuracy for both architectures. This suggests that these motor tasks produce patterns that are genuinely hard to distinguish at the window level. This drives the design of the cross-attention Transformer, which collects information from both sides across all timesteps instead of relying on a single bias.
+
+
 
 \subsection{Limitations}
+Experiments are performed using a single dataset (PADS). Test on an independent cohort is necessary to confirm generalization. 
+The patient partition must be maintained across all training. SSL pretraining is done on the same dataset which was used for fine-tuning. Pre-training would ideally exploit a larger corpus of unlabeled IMU data from many different populations. Clinical verification by experts against true diagnosis has not been conducted and is essential. The Raspberry Pi results emulate smartwatch deployment but do not directly measure power consumption on target hardware.
 
-The primary limitation of this work is that all experiments are
-conducted on a single dataset (PADS). While patient-level
-cross-validation reduces optimistic bias within this dataset, external
-validation on an independent cohort from a different clinical site
-or smartwatch hardware is necessary to confirm generalisability.
-Second, the self-supervised pre-training uses the same dataset as
-fine-tuning; ideally, pre-training would leverage a larger pool of
-unlabelled IMU data from diverse populations, which is the norm for
-self-supervised learning in other domains. Third, clinical
-validation---where model predictions are evaluated by a specialist
-against ground-truth diagnosis over time---has not been performed and
-remains essential before real-world deployment. Finally, the
-Raspberry Pi results provide a proxy for smartwatch deployment but
-not a direct evaluation; power consumption and latency on actual
-smartwatch hardware should be measured in future work.
+ 
 
 
 % ═════════════════════════════════════════════════════════════════
@@ -1021,46 +544,143 @@ smartwatch hardware should be measured in future work.
 \label{sec:conclusion}
 % ═════════════════════════════════════════════════════════════════
 
-We proposed a Dual-Channel Cross-Attention Transformer framework for
-detecting Parkinson's Disease from bilateral wrist-worn IMU data. By
-processing left and right wrist signals through parallel encoders
-connected by cross-attention, the model explicitly captures the motor
-asymmetry that is a clinically established characteristic of PD. A
-hierarchical binary classification strategy decomposes the
-three-group problem into focused HC-PD and PD-DD tasks, yielding a
-$4.48$~pp improvement over a three-class baseline. Patient-level
-stratified 5-fold cross-validation provides less biased estimates of
-true out-of-sample performance, and band-pass filtering is shown to
-be an essential preprocessing step, reducing fold-to-fold variance by
-an order of magnitude.
+Here we have proposed a Dual-Channel Cross-Attention Encoder for PD detection from bilateral wrist-worn IMU data. Through cross-attention, the model captures motor asymmetry.
 
-The self-supervised contrastive pre-training stage demonstrates that
-competitive classification performance is achievable with only $20\%$
-of labelled data, which is a critical finding for developing clinical
-frameworks where expert annotation is scarce. The primary limitation
-is reliance on a single dataset; external validation and direct
-smartwatch hardware evaluation are required before clinical deployment.
+a hierarchical binary classification approach which divides into focused HC\~vs.\~PD and PD\~vs.\~DD tasks, improving over three-class baseline achieved 93.12\% HC\~vs.\~PD and 87.04\% PD\~vs.\~DD accuracy, where cross-validation showed that primary challenge of distinguishing the PD\~vs.\~DD boundary.
 
-Future work should investigate task-aware fusion strategies to improve
-performance on difficult motor tasks such as Entrainment and
-PointFinger. Expanding the framework to longitudinal data would enable
-disease progression monitoring over time. The interdisciplinary nature
-of this problem---spanning clinical neurology, signal processing, and
-deep learning---means that clinical validation in partnership with
-specialist assessment is an essential next step. Ultimately, a
-validated continuous monitoring system of this kind could reduce the
-burden on specialist clinics and enable earlier, more objective
-intervention for millions of patients living with Parkinson's Disease.
+SSL Pre-Training Brings 91.02\% Combined Accuracy With 20\% Labels, and a pre-trained foundation model (TimesFM+LoRA) attains similar performance, validating that self-supervised representation learning are effective approaches for this clinical setting. The main limitations include dependency on one dataset. 
+
+Future work should, explore task-aware fusion for challenging motor tasks, and extend to longitudinal data.
+
+for disease progression monitoring. Eventually, a validated continuous monitoring system may relieve specialist clinics and provide earlier intervention for millions of patients living with Parkinson’s Disease.
+
 
 
 % ─── References ──────────────────────────────────────────────────
-% MLHC uses natbib. Use \citep{} for parenthetical and \citet{}
-% for textual citations throughout.
-% Replace the placeholder below with your actual .bib file.
-\bibliography{references}
+\begin{thebibliography}{17}
+\providecommand{\natexlab}[1]{#1}
 
-% ─── Appendix (optional, does not count toward page limit) ───────
-% \appendix
-% \section{Additional Results}
+\bibitem[Bloem et~al.(2021)Bloem, Okun, and Klein]{bloem2021}
+Bloem, B.~R., Okun, M.~S., and Klein, C.
+\newblock Parkinson's disease.
+\newblock \emph{The Lancet}, 397(10291):2284--2303, 2021.
+
+\bibitem[Das et~al.(2024)Das, Kong, Leber, Mathews, and Sen]{das2024}
+Das, A., Kong, W., Leber, A., Mathews, R., and Sen, R.
+\newblock A decoder-only foundation model for time-series forecasting.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine
+  Learning (ICML)}, 2024.
+
+\bibitem[Dorsey et~al.(2018)Dorsey, Sherer, Okun, and Bloem]{dorsey2018}
+Dorsey, E.~R., Sherer, T., Okun, M.~S., and Bloem, B.~R.
+\newblock The {Parkinson} pandemic---a call to action.
+\newblock \emph{JAMA Neurology}, 75(1):9--10, 2018.
+
+\bibitem[Eldele et~al.(2021)Eldele, Ragab, Chen, Wu, Kwoh, Li, and
+  Guan]{eldele2021}
+Eldele, E., Ragab, M., Chen, Z., Wu, M., Kwoh, C.~K., Li, X., and Guan, C.
+\newblock Time-series representation learning via temporal and contextual
+  contrasting.
+\newblock In \emph{Proceedings of the Thirtieth International Joint Conference
+  on Artificial Intelligence (IJCAI)}, pp.\  2352--2359, 2021.
+
+\bibitem[Guo et~al.(2022)Guo, Huang, Zhang, Wang, Li, Olmo, Wang, Meng, and
+  Chan]{guo2022}
+Guo, Y., Huang, D., Zhang, W., Wang, L., Li, Y., Olmo, G., Wang, Q., Meng,
+  F., and Chan, P.
+\newblock High accuracy wearable detection of freezing of gait in {Parkinson's}
+  disease based on pseudo-multimodal features.
+\newblock \emph{Computers in Biology and Medicine}, 146:105629, 2022.
+
+\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen]{hu2022}
+Hu, E.~J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L.,
+  and Chen, W.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Loshchilov and Hutter(2019)]{loshchilov2019}
+Loshchilov, I. and Hutter, F.
+\newblock Decoupled weight decay regularization.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2019.
+
+\bibitem[van~den Oord et~al.(2018)van~den Oord, Li, and Vinyals]{oord2018}
+van~den Oord, A., Li, Y., and Vinyals, O.
+\newblock Representation learning with contrastive predictive coding.
+\newblock \emph{arXiv preprint arXiv:1807.03748}, 2018.
+
+\bibitem[Patel et~al.(2009)Patel, Lorincz, Hughes, Huggins, Growdon,
+  Standaert, Akay, Dy, Welsh, and Bonato]{patel2009}
+Patel, S., Lorincz, K., Hughes, R., Huggins, N., Growdon, J., Standaert, D.,
+  Akay, M., Dy, J., Welsh, M., and Bonato, P.
+\newblock Monitoring motor fluctuations in patients with {Parkinson's} disease
+  using wearable sensors.
+\newblock \emph{IEEE Transactions on Information Technology in Biomedicine},
+  13(6):864--873, 2009.
+
+\bibitem[Sigcha et~al.(2022)Sigcha, Borz{\`{i}}, Pav{\'o}n, Costa, Costa,
+  Arezes, L{\'o}pez, and De~Arcas]{sigcha2022}
+Sigcha, L., Borz{\`{i}}, L., Pav{\'o}n, I., Costa, N., Costa, S., Arezes, P.,
+  L{\'o}pez, J.~M., and De~Arcas, G.
+\newblock Improvement of performance in freezing of gait detection in
+  {Parkinson's} disease using transformer networks and a single waist-worn
+  triaxial accelerometer.
+\newblock \emph{Engineering Applications of Artificial Intelligence},
+  116:105482, 2022.
+
+\bibitem[Soumma et~al.(2025{\natexlab{a}})Soumma, Alam, Rahman, Mahi, Mamun,
+  Mostafavi, and Ghasemzadeh]{soumma2025fog}
+Soumma, S.~B., Alam, S.~M.~R., Rahman, R., Mahi, U.~N., Mamun, A.,
+  Mostafavi, S.~M., and Ghasemzadeh, H.
+\newblock Freezing of gait detection using {Gramian Angular Fields} and
+  federated learning from wearable sensors.
+\newblock In \emph{47th Annual International Conference of the IEEE Engineering
+  in Medicine and Biology Society (EMBC)}, pp.\  1--7, 2025{\natexlab{a}}.
+
+\bibitem[Soumma et~al.(2025{\natexlab{b}})Soumma, Mangipudi, Peterson, Mehta,
+  and Ghasemzadeh]{soumma2025liftpd}
+Soumma, S.~B., Mangipudi, K., Peterson, D., Mehta, S., and Ghasemzadeh, H.
+\newblock Self-supervised learning and opportunistic inference for continuous
+  monitoring of freezing of gait in {Parkinson's} disease.
+\newblock \emph{ACM Transactions on Computing for Healthcare}, 2025{\natexlab{b}}.
+
+\bibitem[Um et~al.(2017)Um, Pfister, Pichler, Endo, Lang, Hirche, Fietzek,
+  and Kuli{\'c}]{um2017}
+Um, T.~T., Pfister, F.~M.~J., Pichler, D., Endo, S., Lang, M., Hirche, S.,
+  Fietzek, U., and Kuli{\'c}, D.
+\newblock Data augmentation of wearable sensor data for {Parkinson's} disease
+  monitoring using convolutional neural networks.
+\newblock In \emph{Proceedings of the 19th ACM International Conference on
+  Multimodal Interaction (ICMI)}, pp.\  216--220, 2017.
+
+\bibitem[Varghese et~al.(2024)Varghese, Acker, Gemmeke, and
+  Fujarski]{varghese2024}
+Varghese, J., Acker, T., Gemmeke, M., and Fujarski, M.
+\newblock {PADS}: {Parkinson's} disease smartwatch dataset.
+\newblock PhysioNet, 2024.
+
+\bibitem[Varma and Simon(2006)]{varma2006}
+Varma, S. and Simon, R.
+\newblock Bias in error estimation when using cross-validation for model
+  selection.
+\newblock \emph{BMC Bioinformatics}, 7(1):91, 2006.
+
+\bibitem[Vaswani et~al.(2017)Vaswani, Shazeer, Parmar, Uszkoreit, Jones,
+  Gomez, Kaiser, and Polosukhin]{vaswani2017}
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez,
+  A.~N., Kaiser, {\L}., and Polosukhin, I.
+\newblock Attention is all you need.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~30, 2017.
+
+\bibitem[Zhao et~al.(2025)Zhao, Wang, Qi, Yang, and Yang]{zhao2025mfam}
+Zhao, W., Wang, X., Qi, J., Yang, Y., and Yang, P.
+\newblock Multi-scale frequency-aware adversarial network for {Parkinson's}
+  disease assessment using wearable sensors.
+\newblock \emph{arXiv preprint arXiv:2510.10558}, 2025.
+
+\end{thebibliography}
 
 \end{document}

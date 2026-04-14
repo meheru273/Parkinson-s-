@@ -1,0 +1,90 @@
+{
+  "combined_test_acc_mean": 0.9308767636504415,
+  "combined_test_acc_std": 0.0004671806782468878,
+  "hc_vs_pd_acc_mean": 0.936073731876534,
+  "hc_vs_pd_acc_std": 0.0008816064154241541,
+  "pd_vs_dd_acc_mean": 0.9256797954243489,
+  "pd_vs_dd_acc_std": 0.0007446809122294907,
+  "per_fold": [
+    {
+      "fold": 1,
+      "best_test_acc": 0.930518398686498,
+      "hc_acc": 0.9358870967741936,
+      "pd_acc": 0.9251497005988024,
+      "hyperparams": {
+        "model_dim": 32,
+        "num_heads": 4,
+        "num_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.1585975095802465,
+        "learning_rate": 0.0006781184382968634,
+        "weight_decay": 1.4941181627093251e-05,
+        "batch_size": 32
+      }
+    },
+    {
+      "fold": 2,
+      "best_test_acc": 0.9306910372802781,
+      "hc_acc": 0.9354838709677419,
+      "pd_acc": 0.9258982035928144,
+      "hyperparams": {
+        "model_dim": 32,
+        "num_heads": 4,
+        "num_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.11908546939221379,
+        "learning_rate": 0.0009942672296441586,
+        "weight_decay": 0.0001462032026499706,
+        "batch_size": 64
+      }
+    },
+    {
+      "fold": 3,
+      "best_test_acc": 0.9303167857832721,
+      "hc_acc": 0.9354838709677419,
+      "pd_acc": 0.9251497005988024,
+      "hyperparams": {
+        "model_dim": 32,
+        "num_heads": 4,
+        "num_layers": 3,
+        "d_ff": 128,
+        "dropout": 0.11081411257914145,
+        "learning_rate": 0.0005017356672740145,
+        "weight_decay": 3.58128728397721e-05,
+        "batch_size": 32
+      }
+    },
+    {
+      "fold": 4,
+      "best_test_acc": 0.9313772735659419,
+      "hc_acc": 0.935702875399361,
+      "pd_acc": 0.9270516717325228,
+      "hyperparams": {
+        "model_dim": 64,
+        "num_heads": 4,
+        "num_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.1175332274191071,
+        "learning_rate": 0.0006538364145051447,
+        "weight_decay": 0.001243525122664602,
+        "batch_size": 64
+      }
+    },
+    {
+      "fold": 5,
+      "best_test_acc": 0.9314803229362172,
+      "hc_acc": 0.9378109452736318,
+      "pd_acc": 0.9251497005988024,
+      "hyperparams": {
+        "model_dim": 64,
+        "num_heads": 8,
+        "num_layers": 2,
+        "d_ff": 256,
+        "dropout": 0.11783746013434154,
+        "learning_rate": 0.00046594823816571127,
+        "weight_decay": 0.0019692244672477217,
+        "batch_size": 32
+      }
+    }
+  ]
+}

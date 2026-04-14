@@ -1813,7 +1813,7 @@ def main():
         
         # Training settings
         'num_folds': 5,
-        'max_folds_to_train': 1,
+        'max_folds_to_train': 5,
         'batch_size': 32,
         'learning_rate': 1e-4,
         'weight_decay': 1e-2,

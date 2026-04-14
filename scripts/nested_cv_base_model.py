@@ -2,6 +2,7 @@ import pathlib
 import numpy as np
 import json
 import copy
+import shutil
 import time
 import torch
 import torch.nn as nn
@@ -75,10 +76,18 @@ def load_checkpoint(outer_fold_idx, model, optimizer, scheduler, scaler):
              patience_counter, fold_metrics_hc, fold_metrics_pd,
              train_metrics_history_hc, train_metrics_history_pd, best_probs_dict)
     or None if no checkpoint exists.
+    Falls back to PREV_RUN_DIR when no local checkpoint is present.
     """
-    path = os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}_mid_training.pth")
+    fname = f"fold_{outer_fold_idx+1}_mid_training.pth"
+    path = os.path.join(CHECKPOINT_DIR, fname)
     if not os.path.exists(path):
-        return None
+        # Fall back to previous Kaggle run's output
+        prev_path = os.path.join(PREV_RUN_DIR, "checkpoints", fname)
+        if os.path.exists(prev_path):
+            print(f"  [ckpt] No local checkpoint – copying from previous run: {prev_path}")
+            shutil.copy2(prev_path, path)
+        else:
+            return None
     print(f"  [ckpt] Resuming fold {outer_fold_idx+1} from {path}")
     ck = torch.load(path, map_location='cpu')
     model.load_state_dict(ck['model_state_dict'])
@@ -164,6 +173,40 @@ def mark_fold_done(outer_fold_idx):
     mid_ck = os.path.join(CHECKPOINT_DIR, f"fold_{outer_fold_idx+1}_mid_training.pth")
     if os.path.exists(mid_ck):
         os.remove(mid_ck)
+
+
+def bootstrap_from_prev_run(prev_run_dir):
+    """Copy resumable artifacts from a previous Kaggle run's output into
+    the current working directories so that all resume functions find them
+    locally.  Copies:
+      - checkpoints/*.done, *_mid_training.pth, run_state.json, config.json,
+        best_model_*.pth
+      - optuna_studies/*.db  (SQLite Optuna storage)
+    Already-existing local files are NEVER overwritten (local wins).
+    """
+    if not prev_run_dir or not os.path.isdir(prev_run_dir):
+        return
+
+    def _copy_dir(src_subdir, dst_dir, glob_pattern="*"):
+        import glob
+        src = os.path.join(prev_run_dir, src_subdir)
+        if not os.path.isdir(src):
+            return
+        os.makedirs(dst_dir, exist_ok=True)
+        for filepath in glob.glob(os.path.join(src, glob_pattern)):
+            if not os.path.isfile(filepath):
+                continue
+            dst_path = os.path.join(dst_dir, os.path.basename(filepath))
+            if os.path.exists(dst_path):
+                continue  # never overwrite local files
+            print(f"  [bootstrap] {filepath} → {dst_path}")
+            shutil.copy2(filepath, dst_path)
+
+    _copy_dir("checkpoints", CHECKPOINT_DIR)          # .done, mid_training, run_state, best_model, config
+    _copy_dir("optuna_studies", "optuna_studies", "*.db")  # Optuna SQLite DBs
+    print("  [bootstrap] Previous-run artifacts copied.")
+
+
 def create_windows(data, window_size=256, overlap=0):
     
     n_samples, n_channels = data.shape
@@ -1156,13 +1199,16 @@ def train_model(config):
     # NESTED CROSS-VALIDATION WITH OPTUNA
     # ====================================================================
     os.makedirs("optuna_studies", exist_ok=True)
+    
+    # ── Resume: bootstrap artifacts from previous Kaggle run ─────────────────
+    global PREV_RUN_DIR
+    PREV_RUN_DIR = config.get('resume_from', '')
+    bootstrap_from_prev_run(PREV_RUN_DIR)
         
     # Outer CV splits
     outer_folds = full_dataset.get_train_test_split(split_type=3, k=config['outer_folds'])
     
     # ── Resume: load global run state ────────────────────────────────────────
-    global PREV_RUN_DIR
-    PREV_RUN_DIR = config.get('resume_from', '')
     completed_folds, best_hyperparams_per_fold, all_outer_results = load_run_state()
     
     # OUTER LOOP: Model evaluation
@@ -1171,8 +1217,8 @@ def train_model(config):
         print(f"OUTER FOLD {outer_fold_idx + 1}/{config['outer_folds']}")
         print(f"{'='*80}\n")
         
-        # Skip already-completed folds
-        if fold_is_done(outer_fold_idx):
+        # Skip already-completed folds (check .done files AND run_state.json)
+        if outer_fold_idx < completed_folds or fold_is_done(outer_fold_idx):
             print(f"  [resume] Outer fold {outer_fold_idx+1} already done – skipping.")
             continue
         
@@ -1509,7 +1555,7 @@ def train_model(config):
 def main():
     
     config = {
-        'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+        'data_root': "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
         'apply_downsampling': True,  
         'apply_bandpass_filter': True,
         
@@ -1534,7 +1580,7 @@ def main():
         # Resumable training
         'patience': 10,              # Early stopping patience for final training
         'checkpoint_interval': 5,    # Save mid-training checkpoint every N epochs
-        'resume_from': "/kaggle/input/notebooks/kawsaralam5811/ncv-base2",  # Previous run output dir (empty string to disable)
+        'resume_from': "/kaggle/input/datasets/meheruzannat/fold-3/optuna3",  
     }
     
     results = train_model(config)

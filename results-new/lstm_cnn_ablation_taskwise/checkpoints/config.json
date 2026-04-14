@@ -1,0 +1,33 @@
+{
+  "data_root": "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+  "apply_downsampling": true,
+  "apply_bandpass_filter": true,
+  "window_size": 256,
+  "input_channels": 12,
+  "hidden_size": 128,
+  "num_lstm_layers": 2,
+  "bidirectional": true,
+  "dropout": 0.3,
+  "num_folds": 5,
+  "batch_size": 32,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "num_epochs": 50,
+  "num_workers": 0,
+  "tasks": [
+    "CrossArms",
+    "DrinkGlas",
+    "Entrainment",
+    "HoldWeight",
+    "LiftHold",
+    "PointFinger",
+    "Relaxed",
+    "StretchHold",
+    "TouchIndex",
+    "TouchNose"
+  ],
+  "model_types": [
+    "cnn",
+    "lstm"
+  ]
+}

@@ -8,7 +8,25 @@
       "WebFetch(domain:www.nature.com)",
       "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
       "WebFetch(domain:www.mdpi.com)",
-      "WebFetch(domain:pubmed.ncbi.nlm.nih.gov)"
+      "WebFetch(domain:pubmed.ncbi.nlm.nih.gov)",
+      "Bash(ls d:/Documents/parkinsons/checkpoints/*.done)",
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna1-2/checkpoints/best_model_nested_cv_fold_1.pth d:/Documents/parkinsons/results-new/nested-cv/fold_1/checkpoints/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna1-2/checkpoints/fold_1.done d:/Documents/parkinsons/results-new/nested-cv/fold_1/checkpoints/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna1-2/metrics/hc_vs_pd_metrics_nested_cv_fold_1.csv d:/Documents/parkinsons/results-new/nested-cv/fold_1/metrics/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna1-2/metrics/pd_vs_dd_metrics_nested_cv_fold_1.csv d:/Documents/parkinsons/results-new/nested-cv/fold_1/metrics/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna1-2/training_history/fold_1_history.csv d:/Documents/parkinsons/results-new/nested-cv/fold_1/training_history/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna3-5/checkpoints/best_model_nested_cv_fold_3.pth d:/Documents/parkinsons/results-new/nested-cv/fold_3/checkpoints/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna3-5/checkpoints/fold_3.done d:/Documents/parkinsons/results-new/nested-cv/fold_3/checkpoints/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna3/hc_vs_pd_metrics_nested_cv_fold_3.csv d:/Documents/parkinsons/results-new/nested-cv/fold_3/metrics/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna3/pd_vs_dd_metrics_nested_cv_fold_3.csv d:/Documents/parkinsons/results-new/nested-cv/fold_3/metrics/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/optuna-studies/optuna3/fold_3_history.csv d:/Documents/parkinsons/results-new/nested-cv/fold_3/training_history/)",
+      "Bash(cp -r d:/Documents/parkinsons/results-new/ssl-k-fold-0-1/checkpoints/fold_0/. d:/Documents/parkinsons/results-new/ssl-results/fold_0/checkpoints/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/ssl-k-fold-0-1/metrics/label_efficiency_results_fold0.csv d:/Documents/parkinsons/results-new/ssl-results/fold_0/metrics/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/ssl-k-fold-0-1/metrics/label_efficiency_permutation_fold0.json d:/Documents/parkinsons/results-new/ssl-results/fold_0/metrics/)",
+      "Bash(cp d:/Documents/parkinsons/results-new/ssl-k-fold-0-1/metrics/label_efficiency_100pct_epochs_fold0.csv d:/Documents/parkinsons/results-new/ssl-results/fold_0/metrics/)",
+      "Bash(cp -r d:/Documents/parkinsons/results-new/ssl-k-fold-0-1/plots/pretrain/fold_0/. d:/Documents/parkinsons/results-new/ssl-results/fold_0/plots/pretrain/)"
     ]
   }
 }

@@ -229,7 +229,6 @@ def k_fold_split_method_contrastive(data_root, full_dataset, k=5):
             class_labels=full_dataset.class_labels[train_mask],
             augmentation_strength=full_dataset.augmentation_strength,
             augmentation_type=full_dataset.augmentation_type,
-            mode=full_dataset.mode,
             ssl_variant=full_dataset.ssl_variant
         )
         
@@ -241,7 +240,6 @@ def k_fold_split_method_contrastive(data_root, full_dataset, k=5):
             class_labels=full_dataset.class_labels[val_mask],
             augmentation_strength=full_dataset.augmentation_strength,
             augmentation_type=full_dataset.augmentation_type,
-            mode=full_dataset.mode,
             ssl_variant=full_dataset.ssl_variant
         )
         
@@ -257,11 +255,10 @@ def k_fold_split_method_contrastive(data_root, full_dataset, k=5):
 
 class ContrastiveDataset(Dataset):
     """
-    Dataset for contrastive pre-training.  Supports two distinct modes:
-    
-    SSL — NTXent / InfoNCE:  anchor=aug₁, positive=aug₂ (diff seed),  negative=raw
-    SSL — Triplet:           anchor=raw,  positive=aug,                negative=raw
-    SupCon:                  anchor=aug,  positive=light-aug (½ σ),    negative=raw, +label
+    Dataset for self-supervised contrastive pre-training.
+
+    SSL — NTXent / InfoNCE:  anchor=aug₁, positive=aug₂ (two independent views)
+    SSL — Triplet:           anchor=raw,  positive=aug
     """
     
     def __init__(
@@ -274,8 +271,7 @@ class ContrastiveDataset(Dataset):
         apply_bandpass_filter: bool = True,
         augmentation_strength: float = 0.3,
         augmentation_type: int = 2,  # 1=gaussian_noise, 2=time_warp, 3=both_random
-        mode: str = 'ssl',           # 'ssl' or 'supcon'
-        ssl_variant: str = 'ntxent', # ssl sub-mode: 'ntxent'/'infonce' or 'triplet'
+        ssl_variant: str = 'ntxent', # 'ntxent'/'infonce' → two-view aug; 'triplet' → raw+aug
         **kwargs
     ):
         self.left_samples = []
@@ -287,8 +283,7 @@ class ContrastiveDataset(Dataset):
         self.apply_bandpass_filter = apply_bandpass_filter
         self.augmentation_strength = augmentation_strength
         self.augmentation_type = augmentation_type
-        self.mode = mode
-        self.ssl_variant = ssl_variant   # controls anchor/positive construction for SSL
+        self.ssl_variant = ssl_variant   # controls anchor/positive construction
         self.data_root = data_root
         self.window_size = window_size
 
@@ -458,109 +453,52 @@ class ContrastiveDataset(Dataset):
         else:
             return data  # fallback: no augmentation
     
-    def _get_hard_negative_idx(self, anchor_class, anchor_patient):
-        """
-        Hard Negative Sampling with PD vs DD priority.
-        
-        Sampling logic:
-        - HC anchor → 70% PD, 30% DD (learn general disease features)
-        - PD anchor → 80% DD, 20% HC (EMPHASIZE PD/DD boundary - most critical!)
-        - DD anchor → 80% PD, 20% HC (EMPHASIZE PD/DD boundary - most critical!)
-        """
-        max_attempts = 50
-        
-        if anchor_class == 0:  # HC anchor
-            # 70% PD, 30% DD
-            if np.random.random() < 0.7:
-                candidate_indices = self.pd_indices
-            else:
-                candidate_indices = self.dd_indices
-        elif anchor_class == 1:  # PD anchor
-            if np.random.random() < 0.8:
-                candidate_indices = self.dd_indices
-            else:
-                candidate_indices = self.hc_indices
-        else:  
-            if np.random.random() < 0.8:
-                candidate_indices = self.pd_indices
-            else:
-                candidate_indices = self.hc_indices
-        
-        for _ in range(max_attempts):
-            neg_idx = np.random.choice(candidate_indices)
-            if self.patient_ids[neg_idx] != anchor_patient:
-                return neg_idx
-        
-        # Fallback: any sample from different class and patient
-        all_different_class = np.where(self.class_labels != anchor_class)[0]
-        for _ in range(max_attempts):
-            neg_idx = np.random.choice(all_different_class)
-            if self.patient_ids[neg_idx] != anchor_patient:
-                return neg_idx
-        
-        return np.random.choice(candidate_indices)
-
     def __getitem__(self, idx):
         """
-        Returns contrastive pairs.  Behaviour depends on self.mode / self.ssl_variant:
-        
-        SSL NTXent/InfoNCE: (anchor=weak_aug, positive=aug, negative=aug)        — 6 tensors
-        SSL Triplet:        (anchor=raw,      positive=aug, negative=raw)        — 6 tensors
-        SupCon:             (anchor=aug,  positive=light−aug, negative=raw, lbl) — 7 tensors
+        Returns 6 tensors: (left_anchor, right_anchor, left_positive, right_positive,
+                            left_negative, right_negative)
+
+        SSL NTXent/InfoNCE: anchor=aug₁, positive=aug₂ (two independent views)
+        SSL Triplet:        anchor=raw,  positive=aug
         """
         anchor_patient = self.patient_ids[idx]
-        anchor_class = self.class_labels[idx] if len(self.class_labels) > 0 else -1
-        
+
         # --- Anchor & Positive -------------------------------------------------
-        if self.mode == 'supcon':
-            # SupCon: anchor=time-warp aug, positive=light aug (half strength)
-            left_anchor  = self._apply_augmentation(self.left_samples[idx].copy())
-            right_anchor = self._apply_augmentation(self.right_samples[idx].copy())
-            half = self.augmentation_strength * 0.5
-            left_positive  = time_warp(self.left_samples[idx].copy(), sigma=half)
-            right_positive = time_warp(self.right_samples[idx].copy(), sigma=half)
-        elif self.ssl_variant in ('ntxent', 'infonce'):
-            # SSL NTXent/InfoNCE: anchor=aug₁, positive=aug₂ — independent coin flips,
-            # SAME augmentation_strength for both (two random views of same sample)
+        if self.ssl_variant in ('ntxent', 'infonce'):
+            # Two independent augmented views of the same sample
             left_anchor    = self._apply_augmentation(self.left_samples[idx].copy())
             right_anchor   = self._apply_augmentation(self.right_samples[idx].copy())
             left_positive  = self._apply_augmentation(self.left_samples[idx].copy())
             right_positive = self._apply_augmentation(self.right_samples[idx].copy())
         else:
-            # SSL Triplet: anchor=raw (clean), positive=time-warp aug
+            # Triplet: anchor=raw (clean), positive=augmented
             left_anchor    = self.left_samples[idx].copy()
             right_anchor   = self.right_samples[idx].copy()
             left_positive  = self._apply_augmentation(self.left_samples[idx].copy())
             right_positive = self._apply_augmentation(self.right_samples[idx].copy())
-        
-        # --- Negative ----------------------------------------------------------
-        if self.mode == 'supcon' and anchor_class >= 0:
-            # SupCon: class-aware hard negative (different class + different patient)
-            neg_idx = self._get_hard_negative_idx(anchor_class, anchor_patient)
-        else:
-            # SSL: random negative (different patient only, no labels)
-            max_attempts = 50
-            neg_idx = idx
-            for _ in range(max_attempts):
-                neg_idx = np.random.randint(0, len(self.left_samples))
-                if self.patient_ids[neg_idx] != anchor_patient:
-                    break
-        
+
+        # --- Negative: random sample from a different patient ------------------
+        max_attempts = 50
+        neg_idx = idx
+        for _ in range(max_attempts):
+            neg_idx = np.random.randint(0, len(self.left_samples))
+            if self.patient_ids[neg_idx] != anchor_patient:
+                break
+
         # Negative augmentation:
-        #   aug_type==3: independent coin flip for each wrist — applies in all modes
-        #   NTXent/InfoNCE SSL: also augment negative (standard two-view practice)
-        #   Triplet / SupCon: negative stays raw
+        #   NTXent/InfoNCE: augment negative (standard two-view practice)
+        #   Triplet / aug_type==3: augment via coin flip
         if self.augmentation_type == 3:
             left_negative  = self._apply_augmentation(self.left_samples[neg_idx].copy())
             right_negative = self._apply_augmentation(self.right_samples[neg_idx].copy())
-        elif self.ssl_variant in ('ntxent', 'infonce') and self.mode == 'ssl':
+        elif self.ssl_variant in ('ntxent', 'infonce'):
             left_negative  = self._apply_augmentation(self.left_samples[neg_idx].copy())
             right_negative = self._apply_augmentation(self.right_samples[neg_idx].copy())
         else:
             left_negative  = self.left_samples[neg_idx].copy()
             right_negative = self.right_samples[neg_idx].copy()
-        
-        tensors = (
+
+        return (
             torch.FloatTensor(left_anchor),
             torch.FloatTensor(right_anchor),
             torch.FloatTensor(left_positive),
@@ -568,10 +506,6 @@ class ContrastiveDataset(Dataset):
             torch.FloatTensor(left_negative),
             torch.FloatTensor(right_negative)
         )
-        
-        if self.mode == 'supcon':
-            return tensors + (torch.tensor(anchor_class, dtype=torch.long),)
-        return tensors
 
 
 # ============================================================================
@@ -1042,59 +976,7 @@ class InfoNCELoss(nn.Module):
         return loss
 
 
-class SupConLoss(nn.Module):
-    """
-    Supervised Contrastive Loss (Khosla et al., 2020).
-    
-    All samples sharing the same class label within a batch act as positives.
-    Samples with different labels act as negatives.
-    """
-    def __init__(self, temperature: float = 0.07):
-        super().__init__()
-        self.temperature = temperature
-    
-    def forward(self, anchor, positive, negative, labels=None):
-        """Compute SupCon loss.
-        
-        Args:
-            anchor:   (B, D) embeddings
-            positive: (B, D) explicit positive embeddings
-            negative: (B, D) explicit negative embeddings (unused, kept for API compat)
-            labels:   (B,) class labels for each sample
-        """
-        if labels is None:
-            # Fallback to regular contrastive if no labels
-            return F.triplet_margin_loss(anchor, positive, negative, margin=0.3)
-        
-        batch_size = anchor.size(0)
-        device = anchor.device
-        
-        # Stack all embeddings: anchor + positive = 2B views
-        features = torch.cat([anchor, positive], dim=0)  # (2B, D)
-        # Duplicate labels for both views
-        all_labels = torch.cat([labels, labels], dim=0)  # (2B,)
-        
-        # Cosine similarity matrix (2B x 2B)
-        sim_matrix = torch.mm(features, features.t()) / self.temperature  # (2B, 2B)
-        
-        # Mask out self-similarity
-        self_mask = torch.eye(2 * batch_size, device=device).bool()
-        sim_matrix = sim_matrix.masked_fill(self_mask, float('-inf'))
-        
-        # Positive mask: same label, different view
-        label_match = all_labels.unsqueeze(0) == all_labels.unsqueeze(1)  # (2B, 2B)
-        positive_mask = label_match & ~self_mask
-        
-        # For each anchor, compute log-softmax over all non-self entries, 
-        # then average over positive positions
-        log_prob = sim_matrix - torch.logsumexp(sim_matrix, dim=1, keepdim=True)
-        
-        # Mean of log-prob for positive pairs
-        n_positives = positive_mask.sum(dim=1).clamp(min=1)
-        mean_log_prob = (log_prob * positive_mask.float()).sum(dim=1) / n_positives
-        
-        loss = -mean_log_prob.mean()
-        return loss
+
 
 
 # ============================================================================
@@ -1324,86 +1206,64 @@ def knn_probe(encoder, labeled_loader, device, n_neighbors=5):
 # TRAINING FUNCTIONS
 # ============================================================================
 
-def train_contrastive_epoch(model, dataloader, criterion, optimizer, device, mode='ssl'):
-    """Train encoder for one epoch with contrastive loss."""
+def train_contrastive_epoch(model, dataloader, criterion, optimizer, device):
+    """Train encoder for one epoch with SSL contrastive loss."""
     model.train()
     total_loss = 0.0
-    
+
     for batch in tqdm(dataloader, desc="Contrastive Training"):
-        if mode == 'supcon' and len(batch) == 7:
-            (left_anchor, right_anchor, 
-             left_positive, right_positive,
-             left_negative, right_negative, labels) = batch
-            labels = labels.to(device)
-        else:
-            (left_anchor, right_anchor, 
-             left_positive, right_positive,
-             left_negative, right_negative) = batch
-            labels = None
-        
-        left_anchor = left_anchor.to(device)
-        right_anchor = right_anchor.to(device)
-        left_positive = left_positive.to(device)
+        (left_anchor, right_anchor,
+         left_positive, right_positive,
+         left_negative, right_negative) = batch
+
+        left_anchor    = left_anchor.to(device)
+        right_anchor   = right_anchor.to(device)
+        left_positive  = left_positive.to(device)
         right_positive = right_positive.to(device)
-        left_negative = left_negative.to(device)
+        left_negative  = left_negative.to(device)
         right_negative = right_negative.to(device)
-        
+
         optimizer.zero_grad()
-        
-        anchor_emb = model(left_anchor, right_anchor)
+
+        anchor_emb   = model(left_anchor,   right_anchor)
         positive_emb = model(left_positive, right_positive)
         negative_emb = model(left_negative, right_negative)
-        
-        if labels is not None:
-            loss = criterion(anchor_emb, positive_emb, negative_emb, labels=labels)
-        else:
-            loss = criterion(anchor_emb, positive_emb, negative_emb)
-        
+
+        loss = criterion(anchor_emb, positive_emb, negative_emb)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        
+
         total_loss += loss.item()
-    
+
     return total_loss / len(dataloader)
 
 
-def validate_contrastive_epoch(model, dataloader, criterion, device, mode='ssl'):
-    """Validate encoder for one epoch with contrastive loss (no gradients)."""
+def validate_contrastive_epoch(model, dataloader, criterion, device):
+    """Validate encoder for one epoch with SSL contrastive loss (no gradients)."""
     model.eval()
     total_loss = 0.0
-    
+
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Contrastive Validation"):
-            if mode == 'supcon' and len(batch) == 7:
-                (left_anchor, right_anchor, 
-                 left_positive, right_positive,
-                 left_negative, right_negative, labels) = batch
-                labels = labels.to(device)
-            else:
-                (left_anchor, right_anchor, 
-                 left_positive, right_positive,
-                 left_negative, right_negative) = batch
-                labels = None
-            
-            left_anchor = left_anchor.to(device)
-            right_anchor = right_anchor.to(device)
-            left_positive = left_positive.to(device)
+            (left_anchor, right_anchor,
+             left_positive, right_positive,
+             left_negative, right_negative) = batch
+
+            left_anchor    = left_anchor.to(device)
+            right_anchor   = right_anchor.to(device)
+            left_positive  = left_positive.to(device)
             right_positive = right_positive.to(device)
-            left_negative = left_negative.to(device)
+            left_negative  = left_negative.to(device)
             right_negative = right_negative.to(device)
-            
-            anchor_emb = model(left_anchor, right_anchor)
+
+            anchor_emb   = model(left_anchor,   right_anchor)
             positive_emb = model(left_positive, right_positive)
             negative_emb = model(left_negative, right_negative)
-            
-            if labels is not None:
-                loss = criterion(anchor_emb, positive_emb, negative_emb, labels=labels)
-            else:
-                loss = criterion(anchor_emb, positive_emb, negative_emb)
-            
+
+            loss = criterion(anchor_emb, positive_emb, negative_emb)
             total_loss += loss.item()
-    
+
     return total_loss / len(dataloader)
 
 
@@ -1652,31 +1512,31 @@ def load_finetuned_classifier(checkpoint_path, config, device=None):
 # MAIN TRAINING PIPELINE
 # ============================================================================
 
-def pretrain_self_supervised(config, exclude_patient_ids=None):
-    
+def pretrain_self_supervised(config, exclude_patient_ids=None, fold_idx=0):
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    
-    os.makedirs("checkpoints", exist_ok=True)
-    os.makedirs("plots/pretrain", exist_ok=True)
-    
+
+    fold_dir = f"checkpoints/fold_{fold_idx}"
+    plot_pretrain_dir = f"plots/pretrain/fold_{fold_idx}"
+    os.makedirs(fold_dir, exist_ok=True)
+    os.makedirs(plot_pretrain_dir, exist_ok=True)
+
     # Save config.json once before pre-training
     config_serializable = {k: v for k, v in config.items()
                            if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
-    with open('checkpoints/config.json', 'w') as f:
+    with open(f'{fold_dir}/config.json', 'w') as f:
         json.dump(config_serializable, f, indent=2)
-    print("\u2713 Config saved: checkpoints/config.json")
-    
-    mode = config.get('pretrain_mode', 'ssl')
-    
-    print(f"\nPHASE 1: Contrastive Pre-training (mode: {mode.upper()})")
-    if mode == 'ssl':
-        print("  SSL: full dataset, random negatives, NTXent/InfoNCE loss")
-    else:
-        print("  SupCon: train-split only, class-aware negatives, SupCon loss")
-    
+    print(f"\u2713 Config saved: {fold_dir}/config.json")
+
     # --- Build dataset --------------------------------------------------------
-    ssl_variant = config.get('loss_type', 'ntxent')  # 'ntxent'/'infonce' → aug+aug; 'triplet' → raw+aug
+    # ssl_variant controls augmentation strategy:
+    #   'ntxent'/'infonce' → anchor=aug₁, positive=aug₂ (two-view)
+    #   'triplet'          → anchor=raw,  positive=aug  (raw+aug pair)
+    ssl_variant = config.get('loss_type', 'ntxent')
+
+    print(f"\nPHASE 1: Self-Supervised Pre-training (loss: {ssl_variant.upper()})")
+
     full_dataset = ContrastiveDataset(
         data_root=config['data_root'],
         window_size=config.get('window_size', 256),
@@ -1684,11 +1544,10 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
         apply_bandpass_filter=config.get('apply_bandpass_filter', True),
         augmentation_strength=config.get('augmentation_strength', 0.3),
         augmentation_type=config.get('augmentation_type', 2),
-        mode=mode,
         ssl_variant=ssl_variant
     )
     
-    # Exclude test-fold patients from pretraining (both SSL and SupCon)
+    # Exclude test-fold patients from pretraining
     if exclude_patient_ids is not None and len(exclude_patient_ids) > 0:
         keep_mask = ~np.isin(full_dataset.patient_ids, exclude_patient_ids)
         full_dataset.left_samples   = full_dataset.left_samples[keep_mask]
@@ -1705,7 +1564,7 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
     pretrain_folds = k_fold_split_method_contrastive(
         config['data_root'], full_dataset, k=config.get('num_folds', 5)
     )
-    pretrain_train_dataset, pretrain_val_dataset = pretrain_folds[0]  # use fold 0
+    pretrain_train_dataset, pretrain_val_dataset = pretrain_folds[fold_idx % len(pretrain_folds)]
     
     print(f"\nPre-training train samples: {len(pretrain_train_dataset)}")
     print(f"Pre-training val samples:   {len(pretrain_val_dataset)}")
@@ -1745,23 +1604,18 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
         optimizer, T_max=config['pretrain_epochs'], eta_min=1e-6
     )
     
-    # --- Loss selection (mode-aware) ------------------------------------------
-    if mode == 'supcon':
-        criterion = SupConLoss(temperature=config.get('temperature', 0.07))
-        loss_name = 'supcon'
-    else:  # ssl
-        loss_type = config.get('loss_type', 'ntxent')
-        if loss_type == 'contrastive':
-            criterion = ContrastiveLoss(margin=config.get('margin', 0.3))
-        elif loss_type == 'triplet':
-            criterion = TripletLoss(margin=config.get('margin', 0.3))
-        elif loss_type == 'infonce':
-            criterion = InfoNCELoss(temperature=config.get('temperature', 0.07))
-        else:  # default ntxent
-            criterion = NTXentLoss(temperature=config.get('temperature', 0.07))
-        loss_name = loss_type
-    
-    print(f"Using {loss_name} loss")
+    # --- Loss selection -------------------------------------------------------
+    loss_type = config.get('loss_type', 'ntxent')
+    if loss_type == 'contrastive':
+        criterion = ContrastiveLoss(margin=config.get('margin', 0.3))
+    elif loss_type == 'triplet':
+        criterion = TripletLoss(margin=config.get('margin', 0.3))
+    elif loss_type == 'infonce':
+        criterion = InfoNCELoss(temperature=config.get('temperature', 0.07))
+    else:  # default: ntxent
+        criterion = NTXentLoss(temperature=config.get('temperature', 0.07))
+
+    print(f"Using {loss_type} loss")
     
     # --- Labeled loader for KNN probe (validation patients only) --------------
     knn_interval = config.get('knn_probe_interval', 10)
@@ -1801,10 +1655,10 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
         print(f"\nPre-train Epoch {epoch + 1}/{config['pretrain_epochs']}")
         
         train_loss = train_contrastive_epoch(
-            model, train_loader, criterion, optimizer, device, mode=mode
+            model, train_loader, criterion, optimizer, device
         )
         val_loss = validate_contrastive_epoch(
-            model, val_loader, criterion, device, mode=mode
+            model, val_loader, criterion, device
         )
         scheduler.step()
         
@@ -1834,21 +1688,21 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': train_loss,
                 'val_loss': val_loss,
-                'pretrain_mode': mode,
+                'loss_type': ssl_variant,
                 'config': config
-            }, 'checkpoints/best_contrastive_model.pth')
+            }, f'{fold_dir}/best_contrastive_model.pth')
             print(f"✓ Saved best pre-trained model (val_loss: {val_loss:.4f})")
-            
+
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 print(f"\nEarly stopping at epoch {epoch + 1}")
                 break
-    
+
     # --- Post-training plots --------------------------------------------------
     plot_loss(history['train_loss'], history['val_loss'],
-              'plots/pretrain/contrastive_loss.png')
-    
+              f'{plot_pretrain_dir}/contrastive_loss.png')
+
     if history['knn_hc_pd']:
         plt.figure(figsize=(8, 5))
         knn_epochs = list(range(knn_interval, len(history['knn_hc_pd']) * knn_interval + 1, knn_interval))
@@ -1856,16 +1710,16 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
         plt.plot(knn_epochs, history['knn_pd_dd'], 's-', label='PD vs DD', color='red')
         plt.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, label='Random chance')
         plt.xlabel('Epoch'); plt.ylabel('KNN Accuracy')
-        plt.title(f'KNN Probe During {mode.upper()} Pre-training (Validation Set)')
+        plt.title(f'KNN Probe During SSL Pre-training [{ssl_variant.upper()}] (Validation Set)')
         plt.legend(); plt.grid(alpha=0.3); plt.tight_layout()
-        plt.savefig('plots/pretrain/knn_probe.png', dpi=150, bbox_inches='tight')
+        plt.savefig(f'{plot_pretrain_dir}/knn_probe.png', dpi=150, bbox_inches='tight')
         plt.close()
         print("✓ KNN probe plot saved")
-    
+
     # Load best model
-    checkpoint = torch.load('checkpoints/best_contrastive_model.pth')
+    checkpoint = torch.load(f'{fold_dir}/best_contrastive_model.pth')
     model.load_state_dict(checkpoint['model_state_dict'])
-    
+
     # t-SNE after pretraining (on validation set)
     if config.get('create_plots', True) and knn_loader is not None:
         print("\nGenerating post-pretraining t-SNE (validation set)...")
@@ -1873,8 +1727,8 @@ def pretrain_self_supervised(config, exclude_patient_ids=None):
             model, knn_loader, device
         )
         if features is not None:
-            plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir='plots/pretrain')
-            print("✓ t-SNE saved to plots/pretrain/")
+            plot_tsne(features, hc_pd_labels, pd_dd_labels, output_dir=plot_pretrain_dir)
+            print(f"✓ t-SNE saved to {plot_pretrain_dir}/")
     
     print(f"\n✓ Pre-training complete! Best val_loss: {best_val_loss:.4f}")
     
@@ -1913,19 +1767,21 @@ def plot_label_efficiency(results, output_path):
     print(f"\u2713 Saved label efficiency plot to {output_path}")
 
 
-def label_efficiency_experiment(pretrained_encoder, config):
+def label_efficiency_experiment(pretrained_encoder, config, fold_idx=0):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+
+    fold_dir = f"checkpoints/fold_{fold_idx}"
+    fold_plot_dir = f"plots/label_efficiency/fold_{fold_idx}"
     os.makedirs('metrics', exist_ok=True)
-    os.makedirs('checkpoints', exist_ok=True)
-    os.makedirs('plots/label_efficiency', exist_ok=True)
-    
+    os.makedirs(fold_dir, exist_ok=True)
+    os.makedirs(fold_plot_dir, exist_ok=True)
+
     # Save config.json once before label-efficiency training
     config_serializable = {k: v for k, v in config.items()
                            if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
-    with open('checkpoints/label_efficiency_config.json', 'w') as f:
+    with open(f'{fold_dir}/label_efficiency_config.json', 'w') as f:
         json.dump(config_serializable, f, indent=2)
-    print("\u2713 Config saved: checkpoints/label_efficiency_config.json")
+    print(f"\u2713 Config saved: {fold_dir}/label_efficiency_config.json")
     
     fractions = config.get('label_efficiency_fractions', [0.20, 0.50, 0.70, 1.0])
     evaluation_type = config.get('evaluation_type', 'finetune')
@@ -1939,17 +1795,16 @@ def label_efficiency_experiment(pretrained_encoder, config):
         apply_bandpass_filter=config['apply_bandpass_filter']
     )
     fold_datasets = full_dataset.get_train_test_split(split_type=3, k=config['num_folds'])
-    
-    fold_idx = 0
+
     train_dataset, val_dataset = fold_datasets[fold_idx]
-    
+
     val_loader = DataLoader(val_dataset, batch_size=config['batch_size'],
                             shuffle=False, num_workers=config['num_workers'])
-    
+
     n_train = len(train_dataset)
     print(f"\nFold {fold_idx+1}: Total training samples = {n_train}, Validation samples = {len(val_dataset)}")
-    
-    permutation_path = 'metrics/label_efficiency_permutation.json'
+
+    permutation_path = f'metrics/label_efficiency_permutation_fold{fold_idx}.json'
     
     if os.path.exists(permutation_path):
         with open(permutation_path, 'r') as f:
@@ -2158,7 +2013,7 @@ def label_efficiency_experiment(pretrained_encoder, config):
                 patience_counter = 0
                 
                 # Save model checkpoint with config
-                checkpoint_path = f'checkpoints/label_eff_{pct}pct_best.pth'
+                checkpoint_path = f'{fold_dir}/label_eff_{pct}pct_best.pth'
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'fraction': frac,
@@ -2195,11 +2050,11 @@ def label_efficiency_experiment(pretrained_encoder, config):
     
         if frac == 1.0 and config.get('create_plots', True):
             print("\n[100%] Generating full evaluation artefacts...")
-            full_plot_dir = 'plots/label_efficiency/full_finetune'
+            full_plot_dir = f'{fold_plot_dir}/full_finetune'
             os.makedirs(full_plot_dir, exist_ok=True)
             
             # 1. Per-epoch metric CSV
-            epoch_csv_path = 'metrics/label_efficiency_100pct_epochs.csv'
+            epoch_csv_path = f'metrics/label_efficiency_100pct_epochs_fold{fold_idx}.csv'
             with open(epoch_csv_path, 'w', newline='') as ef:
                 writer = csv.DictWriter(ef, fieldnames=[
                     'epoch', 'train_loss', 'val_loss',
@@ -2264,7 +2119,7 @@ def label_efficiency_experiment(pretrained_encoder, config):
     
 
     # Save results to CSV
-    csv_path = 'metrics/label_efficiency_results.csv'
+    csv_path = f'metrics/label_efficiency_results_fold{fold_idx}.csv'
     with open(csv_path, 'w') as f:
         f.write('pct_labels,n_samples,acc_hc_vs_pd,acc_pd_vs_dd,acc_combined,'
                 'precision_hc,recall_hc,f1_hc,precision_pd,recall_pd,f1_pd,val_cse,best_epoch\n')
@@ -2279,113 +2134,234 @@ def label_efficiency_experiment(pretrained_encoder, config):
     print(f"\n\u2713 Saved results to {csv_path}")
     
     # Plot accuracy vs label percentage
-    plot_label_efficiency(all_fraction_results, 'plots/label_efficiency/accuracy_vs_labels.png')
-    
+    plot_label_efficiency(all_fraction_results, f'{fold_plot_dir}/accuracy_vs_labels.png')
+
     return all_fraction_results
 
 
 def main():
     """Main function for contrastive learning pipeline."""
-    
-    config = {
+
+    USE_NESTED_CV = False  
+    RESULTS_DIR = "/kaggle/input/notebooks/meheruzannat/parkinsons-ssl"      
+
+    base_config = {
         # Data settings
-        'data_root': "/kaggle/input/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
-        'apply_downsampling': True,  # Set to False to skip downsampling (100 Hz → 64 Hz)
+        'data_root': "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+        'apply_downsampling': True,
         'apply_bandpass_filter': True,
         'window_size': 256,
         'augmentation_strength': 0.3,
         'augmentation_type': 3,  # 1=gaussian_noise, 2=time_warp, 3=both_random
-        
-        # Model settings
+
         'input_dim': 6,
-        'model_dim': 32,
-        'num_heads': 8,
-        'num_layers': 3,
-        'd_ff': 256,
-        'dropout': 0.12281570220908891,
         'timestep': 256,
         'num_classes': 2,
         'projection_dim': 64,
         'load_pretrained_checkpoint': None,
         'load_finetuned_checkpoint': None,
-        
+
         # Pre-training settings
-        'pretrain_mode': 'ssl',   # 'ssl' or 'supcon'
         'pretrain_batch_size': 64,
         'pretrain_lr': 1e-4,
         'pretrain_epochs': 50,
         # SSL loss type — also controls augmentation strategy:
         #   'ntxent' / 'infonce' → anchor=aug₁, positive=aug₂ (two-view)
         #   'triplet'            → anchor=raw,  positive=aug  (raw+aug pair)
-        #   SupCon mode ignores this (uses SupConLoss automatically)
         'loss_type': 'infonce',
         'margin': 0.3,
         'temperature': 0.07,
-        'knn_probe_interval': 10, # KNN probe + t-SNE every N epochs (0 to disable)
-        
+        'knn_probe_interval': 0,  # KNN probe every N epochs (0 to disable)
+
         # Fine-tuning / Linear Probing settings
         'evaluation_type': 'finetune',  # 'linear' or 'finetune'
         'num_folds': 5,
-        'batch_size': 32,
-        'learning_rate': 0.0002912623775216651,
-        'weight_decay': 0.00016228510005606125,
         'num_epochs': 50,
         'num_workers': 0,
-        
+
         # Other settings
         'early_stopping_patience': 10,
         'save_metrics': True,
         'create_plots': True,
-        
-        # Label Efficiency Experiment (5%–100%; 100% acts as full fine-tuning)
+
+        # Label Efficiency Experiment (100% acts as full fine-tuning)
         'label_efficiency_fractions': [0.05, 0.10, 0.20, 0.50, 0.70, 1.0],
     }
 
+    # ---------- initial cross-validation hyperparameters ----------
+    initial_cv_config = {
+        'model_dim': 64,
+        'num_heads': 8,
+        'num_layers': 3,
+        'd_ff': 256,
+        'dropout': 0.2,
+        'batch_size': 32,
+        'learning_rate': 0.0005,
+        'weight_decay': 0.01,
+    }
+
+    # ---------- nested cross-validation hyperparameters ----------
+    nested_cv_config = {
+        'model_dim': 32,
+        'num_heads': 8,
+        'num_layers': 3,
+        'd_ff': 256,
+        'dropout': 0.12281570220908891,
+        'batch_size': 32,
+        'learning_rate': 0.0002912623775216651,
+        'weight_decay': 0.00016228510005606125,
+    }
+
+    # ---------- merge ----------
+    config = {**base_config, **(nested_cv_config if USE_NESTED_CV else initial_cv_config)}
+    config['hp_source'] = 'nested_cv' if USE_NESTED_CV else 'initial_cv'
+
+    print(f"Using {'nested CV' if USE_NESTED_CV else 'initial CV'} hyperparameters")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    mode = config.get('pretrain_mode', 'ssl')
-    
-    # --- Phase 1: Pre-training ------------------------------------------------
-    pretrain_history = None
-    if config.get('load_pretrained_checkpoint'):
-        print("\n" + "="*60)
-        print("LOADING PRE-TRAINED ENCODER FROM CHECKPOINT")
-        print("="*60)
-        pretrained_encoder, checkpoint = load_pretrained_encoder(
-            config['load_pretrained_checkpoint'], config, device
-        )
-        print("Skipping pre-training phase...")
+    num_folds = config['num_folds']
+
+    # ── Restore prior results into working directory ─────────────────────────
+    if RESULTS_DIR is not None:
+        import shutil
+        results_path = pathlib.Path(RESULTS_DIR)
+        for subdir in ['checkpoints', 'metrics', 'plots']:
+            src = results_path / subdir
+            if src.exists():
+                dst = pathlib.Path(subdir)
+                if src.is_dir():
+                    # Copy tree, merging with any existing files
+                    for item in src.rglob('*'):
+                        if item.is_file():
+                            dest_file = dst / item.relative_to(src)
+                            dest_file.parent.mkdir(parents=True, exist_ok=True)
+                            if not dest_file.exists():
+                                shutil.copy2(str(item), str(dest_file))
+                                print(f"  Restored: {dest_file}")
+        print(f"✓ Restored prior results from {RESULTS_DIR}")
+
+    # Build patient→label map once (lightweight JSON scan)
+    print("\nBuilding patient fold splits...")
+    data_root = config['data_root']
+    patients_template = pathlib.Path(data_root) / "patients" / "patient_{p:03d}.json"
+    patient_conditions = {}
+    for pid in range(1, 470):
+        p_path = pathlib.Path(str(patients_template).format(p=pid))
+        if p_path.exists():
+            try:
+                with open(p_path, 'r') as f:
+                    cond = json.load(f).get('condition', 'Unknown')
+                patient_conditions[pid] = (0 if cond == 'Healthy' else 1 if 'Parkinson' in cond else 2)
+            except:
+                pass
+
+    pids_sorted = sorted(patient_conditions)
+    plabels = [patient_conditions[p] for p in pids_sorted]
+    skf = StratifiedKFold(n_splits=num_folds, shuffle=True, random_state=42)
+    fold_splits = list(skf.split(pids_sorted, plabels))
+
+    all_fold_results = [None] * num_folds  # indexed by fold
+    fractions = config.get('label_efficiency_fractions', [0.05, 0.10, 0.20, 0.50, 0.70, 1.0])
+    expected_pcts = {int(round(f * 100)) for f in fractions}
+
+    for fold_idx in range(num_folds):
+        # ── Auto-detect completed folds from saved permutation JSON ────────
+        perm_path = f'metrics/label_efficiency_permutation_fold{fold_idx}.json'
+        if os.path.exists(perm_path):
+            with open(perm_path, 'r') as f:
+                perm_data = json.load(f)
+            completed_pcts = set(perm_data.get('completed_fractions', []))
+            prior_results = perm_data.get('completed_results', [])
+            if completed_pcts >= expected_pcts and prior_results:
+                all_fold_results[fold_idx] = prior_results
+                print(f"\n{'='*70}")
+                print(f"  SKIPPING Fold {fold_idx + 1} / {num_folds}  (all {len(expected_pcts)} fractions complete)")
+                print(f"{'='*70}")
+                continue
+
+        print("\n" + "="*70)
+        print(f"  K-FOLD CV  —  Fold {fold_idx + 1} / {num_folds}")
+        print("="*70)
+
+        # --- Phase 1: Pre-training (exclude this fold's test patients) --------
+        existing_pretrain_ckpt = f'checkpoints/fold_{fold_idx}/best_contrastive_model.pth'
+        if config.get('load_pretrained_checkpoint'):
+            print("LOADING PRE-TRAINED ENCODER FROM CHECKPOINT (shared across folds)")
+            pretrained_encoder, _ = load_pretrained_encoder(
+                config['load_pretrained_checkpoint'], config, device
+            )
+        elif os.path.exists(existing_pretrain_ckpt):
+            print(f"✓ Found existing pre-trained encoder for fold {fold_idx}, loading...")
+            pretrained_encoder, _ = load_pretrained_encoder(
+                existing_pretrain_ckpt, config, device
+            )
+        else:
+            _, test_idx = fold_splits[fold_idx]
+            exclude_ids = np.array([pids_sorted[i] for i in test_idx])
+            print(f"Excluding {len(exclude_ids)} test-fold patients from pretraining")
+
+            pretrained_encoder, _ = pretrain_self_supervised(
+                config, exclude_patient_ids=exclude_ids, fold_idx=fold_idx
+            )
+
+        # --- Phase 2: Label Efficiency for this fold --------------------------
+        fold_results = label_efficiency_experiment(pretrained_encoder, config, fold_idx=fold_idx)
+        all_fold_results[fold_idx] = fold_results
+
+    # --- Aggregate across ALL folds -------------------------------------------
+    os.makedirs('metrics', exist_ok=True)
+
+    # Filter to folds that have results (completed or just-processed)
+    valid_fold_results = [r for r in all_fold_results if r is not None]
+    n_complete = len(valid_fold_results)
+    print(f"\n✓ {n_complete}/{num_folds} folds have results")
+
+    summary_rows = []
+
+    print("\n" + "="*70)
+    print("K-FOLD CROSS-VALIDATION SUMMARY")
+    print("="*70)
+    print(f"{'%Labels':>8} | {'HC Acc':>10} | {'PD Acc':>10} | {'Combined':>10} | {'HC F1':>10} | {'PD F1':>10}")
+    print("-"*70)
+
+    for frac in fractions:
+        pct = int(round(frac * 100))
+        fold_vals = {k: [] for k in ['best_val_acc_hc', 'best_val_acc_pd', 'best_val_acc_combined', 'f1_hc', 'f1_pd']}
+        for fold_res in valid_fold_results:
+            for r in fold_res:
+                if r['pct'] == pct:
+                    for k in fold_vals:
+                        fold_vals[k].append(r[k])
+                    break
+
+        if not fold_vals['best_val_acc_combined']:
+            continue
+
+        row = {'pct': pct}
+        for k, vals in fold_vals.items():
+            row[f'{k}_mean'] = float(np.mean(vals))
+            row[f'{k}_std']  = float(np.std(vals))
+        summary_rows.append(row)
+
+        print(f"{pct:>7}% | "
+              f"{row['best_val_acc_hc_mean']:.4f}±{row['best_val_acc_hc_std']:.4f} | "
+              f"{row['best_val_acc_pd_mean']:.4f}±{row['best_val_acc_pd_std']:.4f} | "
+              f"{row['best_val_acc_combined_mean']:.4f}±{row['best_val_acc_combined_std']:.4f} | "
+              f"{row['f1_hc_mean']:.4f}±{row['f1_hc_std']:.4f} | "
+              f"{row['f1_pd_mean']:.4f}±{row['f1_pd_std']:.4f}")
+
+    # Save summary CSV
+    summary_csv = 'metrics/label_efficiency_kfold_summary.csv'
+    if summary_rows:
+        with open(summary_csv, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(summary_rows)
+        print(f"\n\u2713 K-fold summary saved to {summary_csv}")
     else:
-        # Get test-fold patient IDs cheaply via a lightweight patient JSON scan
-        # (avoids loading the entire labeled dataset just for patient IDs)
-        print("\nBuilding patient fold splits for exclusion from pretraining...")
-        data_root = config['data_root']
-        patients_template = pathlib.Path(data_root) / "patients" / "patient_{p:03d}.json"
-        patient_conditions = {}
-        for pid in range(1, 470):
-            p_path = pathlib.Path(str(patients_template).format(p=pid))
-            if p_path.exists():
-                try:
-                    with open(p_path, 'r') as f:
-                        cond = json.load(f).get('condition', 'Unknown')
-                    patient_conditions[pid] = (0 if cond == 'Healthy' else 1 if 'Parkinson' in cond else 2)
-                except:
-                    pass
-        
-        pids_sorted = sorted(patient_conditions)
-        plabels = [patient_conditions[p] for p in pids_sorted]
-        skf = StratifiedKFold(n_splits=config['num_folds'], shuffle=True, random_state=42)
-        _, test_idx = next(iter(skf.split(pids_sorted, plabels)))  # first fold test set
-        exclude_ids = np.array([pids_sorted[i] for i in test_idx])
-        print(f"Will exclude {len(exclude_ids)} test-fold patients from pretraining")
-        
-        pretrained_encoder, pretrain_history = pretrain_self_supervised(
-            config, exclude_patient_ids=exclude_ids
-        )
-    
-    # --- Phase 2: Label Efficiency (5% → 100%; 100% = full fine-tuning) --------
-    label_eff_results = label_efficiency_experiment(pretrained_encoder, config)
-    
-    return pretrained_encoder, label_eff_results
+        print("\n⚠ No complete fold results to summarize yet")
+
+    return all_fold_results
 
 
 

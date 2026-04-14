@@ -698,13 +698,16 @@ def run_ablation_study(config):
             
             if results is not None:
                 all_results[model_type][task] = results
-                
+
                 # Calculate average metrics across folds
                 avg_acc = np.mean([r['best_val_acc'] for r in results])
                 std_acc = np.std([r['best_val_acc'] for r in results])
                 print(f"\n{model_type.upper()} - {task}: Avg Acc = {avg_acc:.4f} ± {std_acc:.4f}")
-    
-    # Save summary
+
+                # Save incrementally after each task so results survive a timeout
+                save_ablation_summary(all_results, config)
+
+    # Final save
     save_ablation_summary(all_results, config)
     
     return all_results
