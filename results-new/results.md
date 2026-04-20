@@ -56,46 +56,84 @@
 
 ## 3. Three-Class BaseModel (HC vs PD vs DD)
 
-### Per-Fold Results
+> Best epoch selected by peak validation accuracy per fold. Source: `ThreeClass_BaseModel/metrics_3class/`.
 
-| Fold | Best Epoch | Overall Acc | HC Acc | PD Acc | DD Acc |
-|------|------------|-------------|--------|--------|--------|
-| 1    | 50         | 0.8893      | 0.8446 | 1.0000 | 0.8125 |
-| 2    | 50         | 0.8796      | 0.7861 | 1.0000 | 0.8398 |
-| 3    | 32         | 0.8510      | 0.6923 | 1.0000 | 0.8421 |
-| 4    | 50         | 0.8603      | 0.7236 | 0.9958 | 0.8429 |
-| 5    | 50         | 0.8883      | 0.8462 | 0.9986 | 0.8071 |
-| **Mean ± Std** | — | **0.8737 ± 0.0165** | **0.7786 ± 0.0629** | **0.9989 ± 0.0018** | **0.8289 ± 0.0168** |
+### Per-Fold Results (Overall Accuracy & F1)
 
-### Per-Class Accuracy Summary
-- **HC (Healthy Control):** 0.7786 ± 0.0629 — highest variance, most challenging class
-- **PD (Parkinson's Disease):** 0.9989 ± 0.0018 — near-perfect, most discriminable
-- **DD (Differential Diagnosis):** 0.8289 ± 0.0168 — intermediate difficulty
+| Fold | Best Epoch | Overall Acc | Overall F1 |
+|------|------------|-------------|------------|
+| 1    | 52         | 0.8964      | 0.8978     |
+| 2    | 90         | 0.8964      | 0.8943     |
+| 3    | 94         | 0.8929      | 0.8938     |
+| 4    | 68         | 0.8936      | 0.8945     |
+| 5    | 65         | 0.8928      | 0.8936     |
+| **Mean ± Std** | — | **0.8944 ± 0.0017** | **0.8948 ± 0.0017** |
+
+### Per-Class Accuracy
+
+| Fold | HC Acc | PD Acc | DD Acc |
+|------|--------|--------|--------|
+| 1    | 0.8438 | 0.9993 | 0.8359 |
+| 2    | 0.8686 | 1.0000 | 0.8109 |
+| 3    | 0.8237 | 1.0000 | 0.8438 |
+| 4    | 0.8502 | 0.9753 | 0.8429 |
+| 5    | 0.8214 | 0.9978 | 0.8438 |
+| **Mean ± Std** | **0.8415 ± 0.0190** | **0.9945 ± 0.0097** | **0.8355 ± 0.0141** |
+
+### Per-Class F1 Score
+
+| Fold | F1 HC  | F1 PD  | F1 DD  |
+|------|--------|--------|--------|
+| 1    | 0.9113 | 0.8851 | 0.8969 |
+| 2    | 0.9132 | 0.8855 | 0.8941 |
+| 3    | 0.9033 | 0.8855 | 0.8926 |
+| 4    | 0.9037 | 0.8847 | 0.8952 |
+| 5    | 0.9007 | 0.8878 | 0.8922 |
+| **Mean ± Std** | **0.9064 ± 0.0052** | **0.8857 ± 0.0013** | **0.8942 ± 0.0019** |
+
+### Per-Class Summary
+- **HC (Healthy Control):** Acc 0.8415 ± 0.0190, F1 0.9064 ± 0.0052 — most challenging class
+- **PD (Parkinson's Disease):** Acc 0.9945 ± 0.0097, F1 0.8857 ± 0.0013 — near-perfect discrimination
+- **DD (Differential Diagnosis):** Acc 0.8355 ± 0.0141, F1 0.8942 ± 0.0019 — intermediate difficulty
 
 ---
 
-## 4. SSL BaseModel — Full Fine-tune (Label Efficiency)
+## 4. Label Efficiency: SSL Fine-tune vs Supervised Baseline
 
-> Averaged over 3 complete folds (fold_0, fold_1, fold_2). Folds 3–4 are incomplete.
+> Shows how quickly each model saturates as more labelled data is added.  
+> **SSL fine-tune**: mean ± std over 3 complete folds (fold\_0–2).  
+> **Supervised baseline**: mean ± std over 5 folds.  
+> Metric: combined accuracy = average of (HC vs PD acc) and (PD vs DD acc).
 
-| % Labels | N Samples | HC vs PD Acc | PD vs DD Acc | Combined Acc | HC F1   | PD F1   |
-|----------|-----------|--------------|--------------|--------------|---------|---------|
-| 5%       | 747       | 0.7939       | 0.7878       | 0.7909       | 0.7925  | 0.7866  |
-| 10%      | 1,494     | 0.8703       | 0.8591       | 0.8648       | 0.8684  | 0.8575  |
-| 20%      | 2,987     | 0.9226       | 0.9167       | 0.9196       | 0.9216  | 0.9161  |
-| 50%      | 7,466     | 0.9293       | 0.9218       | 0.9255       | 0.9284  | 0.9211  |
-| 70%      | 10,453    | 0.9344       | 0.9213       | 0.9279       | 0.9337  | 0.9207  |
-| 100%     | 14,932    | 0.9356       | 0.9250       | 0.9303       | 0.9348  | 0.9244  |
+![Label Efficiency Curve](label_efficiency_curve.png)
 
-### Per-Fold at 100% Labels
+### SSL Fine-tune — Per-% Label Results (mean ± std, 3 folds)
 
-| Fold | HC vs PD Acc | PD vs DD Acc | Combined Acc |
-|------|-------------|-------------|-------------|
-| 0    | 0.9351      | 0.9248      | 0.9299      |
-| 1    | 0.9359      | 0.9251      | 0.9305      |
-| 2    | 0.9359      | 0.9251      | 0.9305      |
+| % Labels | N Samples | HC vs PD Acc | PD vs DD Acc |
+|----------|-----------|--------------|--------------|
+| 5%       | 747       | 0.7939 ± 0.0287 | 0.7878 ± 0.0235 |
+| 10%      | 1,494     | 0.8703 ± 0.0110 | 0.8591 ± 0.0129 |
+| 20%      | 2,987     | 0.9226 ± 0.0057 | 0.9167 ± 0.0014 |
+| 50%      | 7,466     | 0.9293 ± 0.0070 | 0.9218 ± 0.0031 |
+| 70%      | 10,453    | 0.9344 ± 0.0025 | 0.9213 ± 0.0035 |
+| 100%     | 14,932    | 0.9356 ± 0.0004 | 0.9250 ± 0.0001 |
 
-> Reaches ~92% combined accuracy with only 20% of labels. Consistent across folds.
+### Supervised Baseline — Per-% Label Results (mean ± std, 5 folds)
+
+| % Labels | N Samples | HC vs PD Acc | PD vs DD Acc |
+|----------|-----------|--------------|--------------|  
+| 5%       | ~748      | 0.8412 ± 0.0280 | 0.8470 ± 0.0131 |
+| 10%      | ~1,496    | 0.8748 ± 0.0239 | 0.8730 ± 0.0213 |
+| 20%      | ~2,994    | 0.9103 ± 0.0262 | 0.9013 ± 0.0192 |
+| 50%      | ~7,479    | 0.9362 ± 0.0010 | 0.9255 ± 0.0007 |
+| 70%      | ~10,477   | 0.9360 ± 0.0012 | 0.9256 ± 0.0013 |
+| 100%     | ~14,967   | 0.9299 ± 0.0120 | 0.9209 ± 0.0086 |
+
+### Key Observations
+- **SSL reaches 92% with only 20% of labels** (0.9196); the supervised model needs 50%+ to reach a comparable level (0.9308).
+- **SSL saturates earlier**: the gap closes at 50–70%, consistent with the SSL encoder providing a strong prior representation.
+- **Supervised 100% dips slightly** (0.9254 mean) due to fold 2 stopping early (epoch 6); SSL is stable at 0.9303.
+- Fold-level variation is higher at low label fractions for both models (std ~0.02–0.03 at 5%).
 
 ---
 
@@ -219,15 +257,51 @@
 
 ---
 
+## 9. TimesFM Zero-Shot (Frozen Embeddings → Probe)
+
+> TimesFM embeddings extracted without any fine-tuning; downstream classifiers (KNN k=5/15/25, Logistic Regression) trained on top. 5-fold CV.
+> Source: `timesfm-zeroshot/results/timesfm_zeroshot/metrics/`.
+
+### Summary (mean ± std, 5 folds)
+
+| Method       | Task      | Accuracy          | Precision         | Recall            | F1                |
+|--------------|-----------|-------------------|-------------------|-------------------|-------------------|
+| KNN (k=5)    | HC vs PD  | 0.7992 ± 0.0074   | 0.7998 ± 0.0066   | 0.7992 ± 0.0074   | 0.7974 ± 0.0080   |
+| KNN (k=5)    | PD vs DD  | 0.7590 ± 0.0185   | 0.7646 ± 0.0191   | 0.7590 ± 0.0185   | 0.7564 ± 0.0190   |
+| KNN (k=15)   | HC vs PD  | 0.8034 ± 0.0132   | 0.8052 ± 0.0120   | 0.8034 ± 0.0132   | 0.8010 ± 0.0139   |
+| KNN (k=15)   | PD vs DD  | 0.7663 ± 0.0229   | 0.7775 ± 0.0237   | 0.7663 ± 0.0229   | 0.7622 ± 0.0237   |
+| KNN (k=25)   | HC vs PD  | 0.7996 ± 0.0108   | 0.8025 ± 0.0089   | 0.7996 ± 0.0108   | 0.7965 ± 0.0117   |
+| KNN (k=25)   | PD vs DD  | 0.7646 ± 0.0241   | 0.7783 ± 0.0249   | 0.7646 ± 0.0241   | 0.7597 ± 0.0252   |
+| **LogReg**   | **HC vs PD** | **0.8739 ± 0.0089** | **0.8744 ± 0.0084** | **0.8739 ± 0.0089** | **0.8733 ± 0.0093** |
+| **LogReg**   | **PD vs DD** | **0.8542 ± 0.0120** | **0.8558 ± 0.0126** | **0.8542 ± 0.0120** | **0.8538 ± 0.0119** |
+
+### Per-Fold Detail (Logistic Regression — best zero-shot method)
+
+| Fold | HC vs PD Acc | PD vs DD Acc | Combined Acc |
+|------|--------------|--------------|--------------|
+| 1    | 0.8734       | 0.8585       | 0.8660       |
+| 2    | 0.8585       | 0.8653       | 0.8619       |
+| 3    | 0.8722       | 0.8510       | 0.8616       |
+| 4    | 0.8846       | 0.8324       | 0.8585       |
+| 5    | 0.8806       | 0.8638       | 0.8722       |
+| **Mean ± Std** | **0.8739 ± 0.0089** | **0.8542 ± 0.0120** | **0.8640 ± 0.0052** |
+
+> Zero-shot LogReg reaches **86.4% combined** with no task-specific training — competitive with the supervised CNN (85.0% avg). KNN k=15 is the best non-parametric probe (80.3% / 76.6%).
+
+---
+
 ## Summary Table
 
 | Model | Task | HC vs PD Acc | PD vs DD Acc | Combined Acc |
 |-------|------|-------------|-------------|-------------|
 | BaseModel + BandPass | Binary | **0.9312 ± 0.0043** | 0.8704 ± 0.0366 | 0.9008 ± 0.0205 |
 | BaseModel (no BandPass) | Binary | 0.8598 ± 0.0274 | 0.8539 ± 0.0233 | 0.8569 ± 0.0254 |
-| ThreeClass BaseModel | 3-class | — | — | 0.8737 ± 0.0165 |
-| SSL Full Fine-tune (100%) | Binary (3-fold avg) | 0.9356 | 0.9250 | 0.9303 |
-| SSL Full Fine-tune (20%) | Binary (3-fold avg) | 0.9226 | 0.9167 | 0.9196 |
+| ThreeClass BaseModel | 3-class | — | — | 0.8944 ± 0.0017 |
+| TimesFM Zero-shot (LogReg) | Binary | 0.8739 ± 0.0089 | 0.8542 ± 0.0120 | 0.8640 ± 0.0052 |
+| TimesFM Zero-shot (KNN k=15) | Binary | 0.8034 ± 0.0132 | 0.7663 ± 0.0229 | 0.7849 ± 0.0175 |
+| SSL Fine-tune (20% labels) | Binary (3-fold avg) | 0.9226 | 0.9167 | 0.9196 |
+| SSL Fine-tune (100% labels) | Binary (3-fold avg) | 0.9356 | 0.9250 | 0.9303 |
+| Supervised Baseline (100%) | Binary (5-fold avg) | — | — | 0.9254 ± 0.0104 |
 | SSL Linear Probe (100%) | Binary | **0.9412** | **0.9390** | **0.9401** |
 | Nested CV Transformer | Binary | 0.9361 ± 0.0009 | 0.9257 ± 0.0007 | 0.9309 ± 0.0005 |
 | TimesFM LoRA (4-fold) | Binary | 0.9362 ± 0.0006 | 0.9289 ± 0.0039 | 0.9326 ± 0.0022 |
@@ -238,10 +312,10 @@
 
 ### Key Observations
 1. **Band-pass filtering is critical**: adds ~7 pp on HC vs PD (0.9312 vs 0.8598) and ~1.6 pp on PD vs DD.
-2. **PD is the easiest class**: three-class model achieves 99.89% PD accuracy; HC is the hardest (77.86%).
-3. **SSL full fine-tune is competitive at 93%** with 100% labels, and already ~92% at just 20% of labels.
-4. **SSL linear probe now matches full fine-tune** (~94.0%) after the updated run — frozen features are sufficient given enough samples and longer training.
-5. **Nested CV Transformer is the most consistent** overall model (std < 0.001 across 5 folds).
-6. **LSTM on single-task (Entrainment) is strongest** (96.01%), but task selection matters — TouchNose drops to 82.78%.
-7. **CNN is highly task-dependent**: Relaxed=93.6%, but TouchNose=71.8% and Entrainment=78.4%.
-8. **TimesFM LoRA is competitive across 4 folds** (HC vs PD 0.9362 ± 0.0006, PD vs DD 0.9289 ± 0.0039) — matches the nested-CV transformer on HC vs PD and slightly edges it on PD vs DD.
+2. **PD is the easiest class**: three-class model achieves 99.45% PD accuracy at best epoch; HC F1 0.9064, DD F1 0.8942.
+3. **SSL fine-tune saturates early**: reaches 91.96% with only 20% of labels; supervised model needs 50%+ to match.
+4. **SSL linear probe matches full fine-tune** (~94.0%) — frozen SSL features are strong enough given enough samples.
+5. **TimesFM zero-shot is surprisingly competitive**: LogReg on frozen TimesFM embeddings reaches 86.4% combined with zero task-specific training — beats CNN avg (85.0%).
+6. **Nested CV Transformer is the most consistent**: std < 0.001 across 5 folds.
+7. **LSTM on single-task (Entrainment) is strongest** (96.01%), but task selection matters — TouchNose drops to 82.78%.
+8. **TimesFM LoRA is competitive**: HC vs PD 0.9362 ± 0.0006, matches/edges the nested-CV transformer.

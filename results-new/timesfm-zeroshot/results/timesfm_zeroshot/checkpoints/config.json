@@ -1,0 +1,19 @@
+{
+  "data_root": "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+  "apply_downsampling": true,
+  "apply_bandpass_filter": true,
+  "window_size": 256,
+  "num_folds": 5,
+  "batch_size": 64,
+  "num_workers": 0,
+  "knn_k_values": [
+    5,
+    15,
+    25
+  ],
+  "logreg_max_iter": 2000,
+  "output_dir": "results/timesfm_zeroshot",
+  "create_tsne": true,
+  "create_plots": true,
+  "ablation_type": "zeroshot"
+}

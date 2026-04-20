@@ -1,0 +1,32 @@
+{
+  "data_root": "/kaggle/input/datasets/meherujannat/parkinsons/pads-parkinsons-disease-smartwatch-dataset-1.0.0",
+  "apply_downsampling": true,
+  "apply_bandpass_filter": true,
+  "window_size": 256,
+  "input_dim": 6,
+  "timestep": 256,
+  "num_classes": 2,
+  "num_folds": 5,
+  "num_epochs": 100,
+  "num_workers": 0,
+  "early_stopping_patience": 10,
+  "save_metrics": true,
+  "create_plots": true,
+  "label_efficiency_fractions": [
+    0.05,
+    0.1,
+    0.2,
+    0.5,
+    0.7,
+    1.0
+  ],
+  "model_dim": 64,
+  "num_heads": 8,
+  "num_layers": 3,
+  "d_ff": 256,
+  "dropout": 0.2,
+  "batch_size": 32,
+  "learning_rate": 0.0005,
+  "weight_decay": 0.01,
+  "hp_source": "initial_cv"
+}

@@ -2221,7 +2221,6 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     num_folds = config['num_folds']
 
-    # ── Restore prior results into working directory ─────────────────────────
     if RESULTS_DIR is not None:
         import shutil
         results_path = pathlib.Path(RESULTS_DIR)
@@ -2230,7 +2229,6 @@ def main():
             if src.exists():
                 dst = pathlib.Path(subdir)
                 if src.is_dir():
-                    # Copy tree, merging with any existing files
                     for item in src.rglob('*'):
                         if item.is_file():
                             dest_file = dst / item.relative_to(src)
@@ -2239,6 +2237,53 @@ def main():
                                 shutil.copy2(str(item), str(dest_file))
                                 print(f"  Restored: {dest_file}")
         print(f"✓ Restored prior results from {RESULTS_DIR}")
+
+        # ── Migrate legacy FLAT structure → fold-indexed structure ───────────
+        # Old saved notebooks had no fold subdirs. Map them to fold_0 so the
+        # fold-completion checks and pretrain checkpoint checks find them.
+        import shutil as _shutil
+
+        _legacy_pcts = [5, 10, 20, 50, 70, 100]
+
+        # 1. Pretrain checkpoint
+        flat_pretrain = pathlib.Path('checkpoints/best_contrastive_model.pth')
+        fold0_pretrain = pathlib.Path('checkpoints/fold_0/best_contrastive_model.pth')
+        if flat_pretrain.exists() and not fold0_pretrain.exists():
+            fold0_pretrain.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copy2(str(flat_pretrain), str(fold0_pretrain))
+            print(f"  ↳ Migrated flat pretrain ckpt → {fold0_pretrain}")
+
+        # 2. Label-efficiency checkpoints (all fractions)
+        for _pct in _legacy_pcts:
+            flat_ckpt = pathlib.Path(f'checkpoints/label_eff_{_pct}pct_best.pth')
+            fold_ckpt = pathlib.Path(f'checkpoints/fold_0/label_eff_{_pct}pct_best.pth')
+            if flat_ckpt.exists() and not fold_ckpt.exists():
+                fold_ckpt.parent.mkdir(parents=True, exist_ok=True)
+                _shutil.copy2(str(flat_ckpt), str(fold_ckpt))
+                print(f"  ↳ Migrated flat {_pct}% ckpt → {fold_ckpt}")
+
+        # 3. Permutation JSON  (controls fold-skip logic)
+        flat_perm = pathlib.Path('metrics/label_efficiency_permutation.json')
+        fold0_perm = pathlib.Path('metrics/label_efficiency_permutation_fold0.json')
+        if flat_perm.exists() and not fold0_perm.exists():
+            _shutil.copy2(str(flat_perm), str(fold0_perm))
+            print(f"  ↳ Migrated flat permutation JSON → {fold0_perm}")
+
+        # 4. Results CSV
+        flat_res = pathlib.Path('metrics/label_efficiency_results.csv')
+        fold0_res = pathlib.Path('metrics/label_efficiency_results_fold0.csv')
+        if flat_res.exists() and not fold0_res.exists():
+            _shutil.copy2(str(flat_res), str(fold0_res))
+            print(f"  ↳ Migrated flat results CSV → {fold0_res}")
+
+        # 5. Per-epoch 100% CSV
+        flat_ep = pathlib.Path('metrics/label_efficiency_100pct_epochs.csv')
+        fold0_ep = pathlib.Path('metrics/label_efficiency_100pct_epochs_fold0.csv')
+        if flat_ep.exists() and not fold0_ep.exists():
+            _shutil.copy2(str(flat_ep), str(fold0_ep))
+            print(f"  ↳ Migrated flat 100pct epochs CSV → {fold0_ep}")
+
+        print("✓ Legacy migration complete")
 
     # Build patient→label map once (lightweight JSON scan)
     print("\nBuilding patient fold splits...")
